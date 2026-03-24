@@ -23,10 +23,11 @@
                     | Shared Context Store             |
                     | - inventory                      |
                     | - recipes                        |
+                    | - shopping list / orders         |
                     | - utilities                      |
                     | - meal history                   |
                     | - behaviour profile              |
-                    | - grocery orders                 |
+                    | - conversation memory            |
                     | - recent events                  |
                     +----------------+-----------------+
                                      |
@@ -57,8 +58,10 @@ SaaS/
     |   `-- utility.py
     |-- core/
     |   |-- bootstrap.py
+    |   |-- conversation_manager.py
     |   |-- container.py
     |   |-- context_store.py
+    |   |-- telegram_runner.py
     |   `-- orchestrator.py
     `-- models/
         |-- api.py
@@ -69,7 +72,9 @@ SaaS/
 
 - `ContextStore.snapshot()` gives agents a deep-copy read view of the current state.
 - `ContextStore.update(...)` applies changes with agent attribution and appends an event log entry.
+- Shared context persists to `data/fridge_memory.json` by default, so inventory, expiry dates, shopping list, recipes, behaviour, and conversation memory survive restarts.
 - The orchestrator coordinates multi-agent workflows such as cooking a recipe or responding to a Telegram-style message.
+- `ConversationManager` keeps one active Telegram session per user, compacts old conversations on `/new` or after inactivity, and feeds the carryover summary back into the LLM.
 
 Example cook flow:
 
@@ -83,23 +88,26 @@ Example cook flow:
 
 ## Key Files
 
-- [app/main.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/main.py)
-- [app/core/context_store.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/core/context_store.py)
-- [app/core/orchestrator.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/core/orchestrator.py)
-- [app/core/bootstrap.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/core/bootstrap.py)
-- [app/agents/inventory.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/agents/inventory.py)
-- [app/agents/recipe.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/agents/recipe.py)
-- [app/agents/grocery.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/agents/grocery.py)
-
+- [app/main.py]
+- [app/core/context_store.py]
+- [app/core/conversation_manager.py]
+- [app/core/orchestrator.py]
+- [app/core/bootstrap.py]
+- [app/agents/inventory.py]
+- [app/agents/recipe.py]
+- [app/agents/grocery.py]
 ## Example API Endpoints
 
 - `GET /health`
-- `GET /config/status`
 - `GET /context`
+- `GET /memory`
+- `GET /sessions/{user_id}`
 - `GET /inventory`
 - `POST /inventory/items`
 - `GET /recipes`
 - `GET /recipes/suggestions`
+- `POST /recipes/online/search`
+- `POST /recipes/import`
 - `POST /recipes/{recipe_id}/cook`
 - `GET /groceries/pending`
 - `POST /groceries/order`
@@ -112,6 +120,8 @@ Example cook flow:
 - `POST /telegram/webhook`
 - `GET /telegram/webhook/info`
 - `POST /telegram/webhook/register`
+- `GET /mcp/tools`
+- `POST /mcp/call`
 
 Example commands:
 
@@ -120,6 +130,9 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 
 curl http://127.0.0.1:8000/recipes/suggestions
+curl -X POST http://127.0.0.1:8000/recipes/online/search \
+  -H "Content-Type: application/json" \
+  -d "{\"query\": \"high protein chicken dinner\", \"max_results\": 3}"
 curl http://127.0.0.1:8000/inventory
 curl -X POST http://127.0.0.1:8000/groceries/order/recipe/chicken_rice_bowl
 curl -X POST http://127.0.0.1:8000/telegram/mock \
@@ -127,35 +140,67 @@ curl -X POST http://127.0.0.1:8000/telegram/mock \
   -d "{\"message\": \"what can I cook?\"}"
 ```
 
-## Secrets Setup
+## MCP Tools
 
-Put your secrets in a repo-root `.env` file. Start from `.env.example`.
+The prototype now exposes an MCP-style tool surface for recipe discovery and import:
+
+- `GET /mcp/tools`
+- `POST /mcp/call`
+
+Available tool names:
+
+- `search_recipes_online`
+- `import_recipe`
+- `search_and_import_recipe`
+
+Online recipe discovery uses the OpenAI Responses API with the built-in `web_search` tool and requires a working `LLM_API_KEY`.
+
+## Telegram Modes
+
+You can run Telegram in either mode:
+
+- Webhook mode: used when `TELEGRAM_CHAT_ID` is set and requires a public HTTPS URL in `TELEGRAM_WEBHOOK_URL`
+- Polling mode: used when `TELEGRAM_CHAT_ID` is empty and does not require a domain or webhook
+
+Polling mode now runs through a background worker pool so one slow LLM call or one slow Telegram `sendMessage` does not stall the entire bot. The runner keeps polling, dispatches updates concurrently, and exposes `in_flight` worker counts in `GET /debug/integrations`.
+
+Polling mode command:
 
 ```bash
-cp .env.example .env
+python scripts/poll_telegram.py
 ```
 
-Then set:
+If you run the FastAPI app with `uvicorn app.main:app --reload`, polling mode now starts automatically in the background when `TELEGRAM_CHAT_ID` is empty.
 
-```env
-TELEGRAM_BOT_TOKEN=your-real-telegram-bot-token
-TELEGRAM_CHAT_ID=optional-default-chat-id
-TELEGRAM_WEBHOOK_SECRET=optional-webhook-shared-secret
-TELEGRAM_WEBHOOK_URL=https://your-public-domain.example.com/telegram/webhook
+Useful `.env` settings:
 
-LLM_API_KEY=your-real-llm-api-key
-LLM_MODEL=gpt-4.1-mini
-LLM_BASE_URL=
+```bash
+TELEGRAM_WORKER_COUNT=4
+SESSION_TIMEOUT_MINUTES=30
+MEMORY_STORE_PATH=data/fridge_memory.json
+LOG_STORE_PATH=data/runtime_logs.json
 ```
 
-Notes:
+Session behavior:
 
-- The app reads `.env` automatically at startup through [app/core/settings.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/core/settings.py).
-- `.env` is ignored by git, so your secrets stay out of source control.
-- `GET /config/status` confirms whether Telegram and LLM credentials were detected.
-- Real Telegram webhook support is available at `POST /telegram/webhook`.
-- Register the webhook with `POST /telegram/webhook/register` after your public URL is reachable from Telegram.
-- `POST /telegram/mock` is still available for local testing without Telegram.
+- `/new` starts a new Telegram session immediately
+- after 30 minutes of inactivity, the next message automatically rolls into a new session
+- the previous session is compacted into a carryover summary so the fridge keeps relevant context without dragging the whole transcript forward
+
+Runtime logs:
+
+- integration and lifecycle events are written to `data/runtime_logs.json`
+- inspect them with `GET /debug/logs`
+- if you run `uvicorn app.main:app --reload`, source edits trigger an intentional shutdown/startup cycle; that is the reloader, not a crash
+
+Useful helper commands:
+
+```bash
+python scripts/check_telegram_webhook.py
+python scripts/register_telegram_webhook.py
+```
+
+If you use polling mode, `TELEGRAM_BOT_TOKEN` is enough. You do not need `TELEGRAM_WEBHOOK_URL`.
 
 ## Example Interaction Flow
 

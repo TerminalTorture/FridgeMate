@@ -32,6 +32,8 @@ class Recipe(BaseModel):
     calories: int
     protein_g: int
     cuisine: str = "global"
+    source_url: str | None = None
+    source_title: str | None = None
 
 
 class GroceryLine(BaseModel):
@@ -91,6 +93,23 @@ class ContextEvent(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
 
 
+class ConversationTurn(BaseModel):
+    role: str
+    text: str
+    timestamp: datetime
+
+
+class UserConversationMemory(BaseModel):
+    user_id: str
+    active_session_id: str
+    session_started_at: datetime
+    last_activity_at: datetime
+    carryover_context: str = ""
+    current_status: str = ""
+    turns: list[ConversationTurn] = Field(default_factory=list)
+    completed_session_summaries: list[str] = Field(default_factory=list)
+
+
 class SharedContext(BaseModel):
     version: int = 1
     inventory: list[InventoryItem] = Field(default_factory=list)
@@ -101,5 +120,5 @@ class SharedContext(BaseModel):
     grocery_orders: list[GroceryOrder] = Field(default_factory=list)
     pending_grocery_list: list[GroceryLine] = Field(default_factory=list)
     behaviour: BehaviourProfile = Field(default_factory=BehaviourProfile)
+    conversation_memory: dict[str, UserConversationMemory] = Field(default_factory=dict)
     recent_events: list[ContextEvent] = Field(default_factory=list)
-

@@ -1,0 +1,244 @@
+[
+  {
+    "timestamp": "2026-03-24T07:18:15.726216+00:00",
+    "service": "app",
+    "direction": "internal",
+    "status": "startup",
+    "summary": "Application startup completed.",
+    "metadata": {
+      "telegram_mode": "polling",
+      "memory_store_path": "data/fridge_memory.json",
+      "log_store_path": "data/runtime_logs.json"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:16.345460+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: deleteWebhook.",
+    "metadata": {
+      "method": "deleteWebhook"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:28.937091+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:28.950333+00:00",
+    "service": "telegram",
+    "direction": "inbound",
+    "status": "received",
+    "summary": "Telegram update received.",
+    "metadata": {
+      "has_message": true
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:29.038001+00:00",
+    "service": "telegram",
+    "direction": "internal",
+    "status": "fallback",
+    "summary": "Falling back to LLM reply generation.",
+    "metadata": {
+      "user_id": "460723160"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:31.471400+00:00",
+    "service": "llm",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Responses API call succeeded.",
+    "metadata": {
+      "model": "gpt-5.4-nano"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:32.272945+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: sendMessage.",
+    "metadata": {
+      "method": "sendMessage"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:49.559806+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:51.048380+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:51.070460+00:00",
+    "service": "telegram",
+    "direction": "inbound",
+    "status": "received",
+    "summary": "Telegram update received.",
+    "metadata": {
+      "has_message": true
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:51.129328+00:00",
+    "service": "telegram",
+    "direction": "internal",
+    "status": "fallback",
+    "summary": "Falling back to LLM reply generation.",
+    "metadata": {
+      "user_id": "460723160"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:52.947768+00:00",
+    "service": "llm",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Responses API call succeeded.",
+    "metadata": {
+      "model": "gpt-5.4-nano"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:52.964702+00:00",
+    "service": "mcp",
+    "direction": "internal",
+    "status": "success",
+    "summary": "MCP tool executed: clear_inventory.",
+    "metadata": {
+      "tool_name": "clear_inventory"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:54.775424+00:00",
+    "service": "llm",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Responses API call succeeded.",
+    "metadata": {
+      "model": "gpt-5.4-nano"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:18:55.623621+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: sendMessage.",
+    "metadata": {
+      "method": "sendMessage"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:19:03.350722+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:19:03.363916+00:00",
+    "service": "telegram",
+    "direction": "inbound",
+    "status": "received",
+    "summary": "Telegram update received.",
+    "metadata": {
+      "has_message": true
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:19:04.418011+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: sendMessage.",
+    "metadata": {
+      "method": "sendMessage"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:19:24.050118+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:19:44.592269+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:20:05.274522+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:20:25.828043+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:20:46.401596+00:00",
+    "service": "telegram",
+    "direction": "outbound",
+    "status": "success",
+    "summary": "Telegram API call succeeded: getUpdates.",
+    "metadata": {
+      "method": "getUpdates"
+    }
+  },
+  {
+    "timestamp": "2026-03-24T07:21:04.058399+00:00",
+    "service": "app",
+    "direction": "internal",
+    "status": "shutdown",
+    "summary": "Application shutdown initiated.",
+    "metadata": {
+      "reason": "uvicorn shutdown or reload"
+    }
+  }
+]

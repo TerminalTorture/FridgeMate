@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from app.core.context_store import ContextStore
+from app.core.time_utils import utc_now
 from app.models.domain import MealRecord, Recipe
 
 
@@ -14,7 +15,7 @@ class NutritionAgent:
         meal = MealRecord(
             recipe_id=recipe.id,
             recipe_name=recipe.name,
-            cooked_at=datetime.utcnow(),
+            cooked_at=utc_now(),
             calories=recipe.calories,
             protein_g=recipe.protein_g,
             tags=recipe.tags,
@@ -35,7 +36,7 @@ class NutritionAgent:
 
     def get_summary(self) -> dict[str, object]:
         snapshot = self.store.snapshot()
-        window_start = datetime.utcnow() - timedelta(days=7)
+        window_start = utc_now() - timedelta(days=7)
         recent_meals = [
             meal for meal in snapshot.meal_history if meal.cooked_at >= window_start
         ]

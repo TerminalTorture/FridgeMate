@@ -44,6 +44,49 @@ class InventoryAgent:
 
         return self._get_item(normalized_name)
 
+    def remove_item(self, item_name: str) -> dict[str, object]:
+        normalized_name = item_name.strip().lower()
+        if not normalized_name:
+            raise ValueError("item_name must not be empty.")
+
+        def mutator(state):
+            before = len(state.inventory)
+            state.inventory = [
+                item for item in state.inventory if item.name.lower() != normalized_name
+            ]
+            removed = before - len(state.inventory)
+            if removed == 0:
+                raise LookupError(f"Inventory item {item_name} was not found.")
+            return {"item": item_name, "removed_count": removed}
+
+        updated_state = self.store.update(
+            agent="inventory_agent",
+            action="remove_item",
+            summary=f"Removed inventory item {item_name}.",
+            mutator=mutator,
+        )
+        return {
+            "removed_item": item_name,
+            "inventory_count": len(updated_state.inventory),
+        }
+
+    def clear_inventory(self) -> dict[str, object]:
+        def mutator(state):
+            removed_count = len(state.inventory)
+            state.inventory = []
+            return {"removed_count": removed_count}
+
+        updated_state = self.store.update(
+            agent="inventory_agent",
+            action="clear_inventory",
+            summary="Cleared all inventory items.",
+            mutator=mutator,
+        )
+        return {
+            "removed_count": updated_state.recent_events[0].changes.get("removed_count", 0),
+            "inventory_count": len(updated_state.inventory),
+        }
+
     def expiring_soon(self, days: int = 3) -> list[InventoryItem]:
         threshold = date.today() + timedelta(days=days)
         return [

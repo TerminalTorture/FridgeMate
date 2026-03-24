@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.core.context_store import ContextStore
+from app.core.time_utils import utc_now
 from app.models.domain import GroceryLine, Recipe
 
 
@@ -11,7 +12,7 @@ class BehaviourAgent:
         self.store = store
 
     def record_command(self, command: str) -> dict[str, str | int]:
-        period = self._period_bucket(datetime.now())
+        period = self._period_bucket(utc_now())
 
         def mutator(state):
             state.behaviour.command_usage[command] = (
@@ -45,7 +46,7 @@ class BehaviourAgent:
         )
 
     def record_meal(self, recipe: Recipe) -> dict[str, str]:
-        period = self._period_bucket(datetime.now())
+        period = self._period_bucket(utc_now())
 
         def mutator(state):
             state.behaviour.cooked_recipes[recipe.id] = (

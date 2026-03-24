@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, Header, HTTPException, Query
 
 from app.core.container import build_container
+from app.core.json_log_store import append_json_log
 from app.core.settings import get_settings
+from app.core.time_utils import utc_now
 from app.models.api import (
     GroceryOrderRequest,
     InventoryItemInput,
+    MCPToolCallRequest,
+    OnlineRecipeSearchRequest,
+    RecipeImportRequest,
+    TelegramSendTestRequest,
     TelegramMessageRequest,
     TelegramWebhookRegistrationRequest,
     UtilityUpdateRequest,
@@ -44,17 +54,113 @@ def config_status() -> dict[str, object]:
         "telegram_configured": settings.telegram_configured,
         "llm_configured": settings.llm_configured,
         "llm_model": settings.llm_model,
-        "telegram_mode": "webhook_ready",
+        "telegram_mode": settings.telegram_mode,
+        "memory_store_path": settings.memory_store_path,
+        "log_store_path": settings.log_store_path,
+        "session_timeout_minutes": settings.session_timeout_minutes,
         "notes": [
             "Secrets are loaded from environment variables or a repo-root .env file.",
-            "Telegram now supports a real webhook endpoint at /telegram/webhook.",
+            "If TELEGRAM_CHAT_ID is empty, the app uses Telegram polling mode.",
+            "If TELEGRAM_CHAT_ID is set, the app expects Telegram webhook mode.",
+            "Conversation sessions roll over after inactivity and persist to a JSON memory file.",
         ],
     }
+
+
+@app.get("/debug/integrations")
+def integration_debug() -> dict[str, object]:
+    return {
+        "telegram": container.telegram_service.debug_snapshot(),
+        "telegram_runner": container.telegram_runner.status(),
+        "llm": container.llm_service.debug_snapshot(),
+        "mcp": container.mcp_tool_service.debug_snapshot(),
+        "proxy_env": {
+            "HTTP_PROXY": os.getenv("HTTP_PROXY"),
+            "HTTPS_PROXY": os.getenv("HTTPS_PROXY"),
+            "ALL_PROXY": os.getenv("ALL_PROXY"),
+            "NO_PROXY": os.getenv("NO_PROXY"),
+        },
+    }
+
+
+@app.get("/debug/logs")
+def debug_logs(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, object]:
+    path = Path(settings.log_store_path)
+    if not path.exists():
+        return {"log_store_path": settings.log_store_path, "entries": []}
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        entries = payload if isinstance(payload, list) else []
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read log file: {exc}") from exc
+
+    return {
+        "log_store_path": settings.log_store_path,
+        "entries": entries[-limit:],
+    }
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    append_json_log(
+        {
+            "timestamp": utc_now().isoformat(),
+            "service": "app",
+            "direction": "internal",
+            "status": "startup",
+            "summary": "Application startup completed.",
+            "metadata": {
+                "telegram_mode": settings.telegram_mode,
+                "memory_store_path": settings.memory_store_path,
+                "log_store_path": settings.log_store_path,
+            },
+        }
+    )
+    if settings.telegram_configured and settings.telegram_mode == "polling":
+        container.telegram_runner.start()
+
+
+@app.on_event("shutdown")
+def shutdown_event() -> None:
+    append_json_log(
+        {
+            "timestamp": utc_now().isoformat(),
+            "service": "app",
+            "direction": "internal",
+            "status": "shutdown",
+            "summary": "Application shutdown initiated.",
+            "metadata": {
+                "reason": "uvicorn shutdown or reload",
+            },
+        }
+    )
+    container.telegram_runner.stop()
 
 
 @app.get("/context")
 def get_context():
     return container.store.snapshot()
+
+
+@app.get("/memory")
+def get_memory():
+    snapshot = container.store.snapshot()
+    return {
+        "version": snapshot.version,
+        "memory_store_path": settings.memory_store_path,
+        "inventory_count": len(snapshot.inventory),
+        "recipe_count": len(snapshot.recipe_catalog),
+        "shopping_list_count": len(snapshot.pending_grocery_list),
+        "conversation_users": len(snapshot.conversation_memory),
+        "conversation_memory": snapshot.conversation_memory,
+        "recent_events": snapshot.recent_events[:10],
+    }
+
+
+@app.get("/sessions/{user_id}")
+def get_session_status(user_id: str):
+    return container.conversation_manager.session_status(user_id)
 
 
 @app.get("/inventory")
@@ -85,6 +191,29 @@ def list_recipes():
 @app.get("/recipes/suggestions")
 def suggest_recipes(limit: int = Query(default=3, ge=1, le=10)):
     return {"suggestions": container.recipe_agent.suggest_recipes(limit=limit)}
+
+
+@app.post("/recipes/online/search")
+def search_online_recipes(payload: OnlineRecipeSearchRequest):
+    try:
+        recipes = container.recipe_discovery_service.search_online_recipes(
+            query=payload.query,
+            max_results=payload.max_results,
+        )
+        return {"query": payload.query, "results": recipes}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/recipes/import")
+def import_recipe(payload: RecipeImportRequest):
+    try:
+        recipe = container.recipe_agent.add_recipe(payload.recipe.to_domain())
+        return {"recipe": recipe}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/recipes/{recipe_id}/cook")
@@ -152,10 +281,16 @@ def update_utilities(payload: UtilityUpdateRequest):
 
 @app.post("/telegram/mock")
 def telegram_mock(payload: TelegramMessageRequest):
-    return container.orchestrator.handle_telegram_message(
+    reply = container.telegram_service.build_reply_for_user(
         user_id=payload.user_id,
-        message=payload.message,
+        text=payload.message,
     )
+    return {
+        "user_id": payload.user_id,
+        "reply": reply,
+        "session": container.conversation_manager.session_status(payload.user_id),
+        "context": container.store.snapshot(),
+    }
 
 
 @app.post("/telegram/webhook")
@@ -198,3 +333,112 @@ def register_telegram_webhook(payload: TelegramWebhookRegistrationRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/telegram/send-test")
+def telegram_send_test(payload: TelegramSendTestRequest):
+    chat_id = payload.chat_id or settings.telegram_chat_id
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id is required.")
+    try:
+        return container.telegram_service.send_message(chat_id=chat_id, text=payload.text)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/mcp/tools")
+def list_mcp_tools():
+    return {"tools": container.mcp_tool_service.list_tools()}
+
+
+@app.post("/mcp/call")
+def call_mcp_tool(payload: MCPToolCallRequest):
+    try:
+        return container.mcp_tool_service.call_tool(
+            tool_name=payload.tool_name,
+            arguments=payload.arguments,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/mcp/rpc")
+def mcp_rpc(payload: dict[str, object]):
+    request_id = payload.get("id")
+    method = payload.get("method")
+    params = payload.get("params", {})
+
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {
+                    "name": "mcp-fridge",
+                    "version": "0.1.0",
+                },
+                "capabilities": {
+                    "tools": {},
+                },
+            },
+        }
+
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+
+    if method == "tools/list":
+        tools = [
+            {
+                "name": tool["name"],
+                "description": tool["description"],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        key: {"type": value}
+                        for key, value in tool["arguments"].items()
+                    },
+                },
+            }
+            for tool in container.mcp_tool_service.list_tools()
+        ]
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": tools}}
+
+    if method == "tools/call":
+        try:
+            arguments = params.get("arguments", {}) if isinstance(params, dict) else {}
+            tool_name = params.get("name") if isinstance(params, dict) else None
+            if not tool_name:
+                raise ValueError("Tool name is required.")
+            result = container.mcp_tool_service.call_tool(
+                tool_name=str(tool_name),
+                arguments=arguments if isinstance(arguments, dict) else {},
+            )
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": str(result),
+                        }
+                    ]
+                },
+            }
+        except (LookupError, ValueError, RuntimeError) as exc:
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32000, "message": str(exc)},
+            }
+
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {"code": -32601, "message": f"Method {method} not found."},
+    }

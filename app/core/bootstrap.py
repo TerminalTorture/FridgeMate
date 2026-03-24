@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
+from app.core.time_utils import utc_now
 from app.models.domain import (
     BehaviourProfile,
     ContextEvent,
@@ -122,7 +123,7 @@ def build_initial_context() -> SharedContext:
             MealRecord(
                 recipe_id="veggie_omelette",
                 recipe_name="Veggie Omelette",
-                cooked_at=datetime.utcnow() - timedelta(days=1),
+                cooked_at=utc_now() - timedelta(days=1),
                 calories=420,
                 protein_g=27,
                 tags=["quick", "high-protein", "vegetable-forward"],
@@ -131,7 +132,7 @@ def build_initial_context() -> SharedContext:
             MealRecord(
                 recipe_id="banana_yogurt_smoothie",
                 recipe_name="Banana Yogurt Smoothie",
-                cooked_at=datetime.utcnow() - timedelta(days=2),
+                cooked_at=utc_now() - timedelta(days=2),
                 calories=280,
                 protein_g=14,
                 tags=["quick", "refreshing"],
@@ -155,7 +156,7 @@ def build_initial_context() -> SharedContext:
         ),
         recent_events=[
             ContextEvent(
-                timestamp=datetime.utcnow(),
+                timestamp=utc_now(),
                 agent="bootstrap",
                 action="seed_context",
                 summary="Loaded initial fridge inventory, recipes, and user profile.",

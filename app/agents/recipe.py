@@ -46,6 +46,27 @@ class RecipeAgent:
         )
         return ranked[:limit]
 
+    def add_recipe(self, recipe: Recipe) -> Recipe:
+        normalized_id = self._normalize_id(recipe.id or recipe.name)
+        recipe = recipe.model_copy(update={"id": normalized_id})
+
+        def mutator(state):
+            for index, existing in enumerate(state.recipe_catalog):
+                if existing.id == normalized_id or existing.name.lower() == recipe.name.lower():
+                    state.recipe_catalog[index] = recipe
+                    return {"recipe_id": normalized_id, "mode": "updated"}
+
+            state.recipe_catalog.append(recipe)
+            return {"recipe_id": normalized_id, "mode": "created"}
+
+        self.store.update(
+            agent="recipe_agent",
+            action="add_recipe",
+            summary=f"Added or updated recipe {recipe.name}.",
+            mutator=mutator,
+        )
+        return self.get_recipe(normalized_id)
+
     def evaluate_recipe(self, recipe: Recipe) -> RecipeSuggestion:
         snapshot = self.store.snapshot()
         inventory_map = {item.name.lower(): item for item in snapshot.inventory}
@@ -103,3 +124,7 @@ class RecipeAgent:
             tags=recipe.tags,
             rationale=rationale,
         )
+
+    @staticmethod
+    def _normalize_id(value: str) -> str:
+        return value.strip().lower().replace("-", "_").replace(" ", "_")

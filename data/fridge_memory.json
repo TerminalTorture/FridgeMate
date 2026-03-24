@@ -1,0 +1,699 @@
+{
+  "version": 30,
+  "inventory": [],
+  "recipe_catalog": [
+    {
+      "id": "banana_yogurt_smoothie",
+      "name": "Banana Yogurt Smoothie",
+      "description": "A quick breakfast smoothie that uses ripe bananas and yogurt.",
+      "ingredients": [
+        {
+          "name": "bananas",
+          "quantity": 2.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "yogurt",
+          "quantity": 1.0,
+          "unit": "cups",
+          "optional": false
+        },
+        {
+          "name": "milk",
+          "quantity": 0.3,
+          "unit": "litre",
+          "optional": false
+        }
+      ],
+      "instructions": [
+        "Blend bananas, yogurt, and milk until smooth.",
+        "Serve immediately."
+      ],
+      "tags": [
+        "quick",
+        "refreshing"
+      ],
+      "calories": 280,
+      "protein_g": 14,
+      "cuisine": "breakfast",
+      "source_url": null,
+      "source_title": null
+    },
+    {
+      "id": "chicken_rice_bowl",
+      "name": "Chicken Rice Bowl",
+      "description": "A protein-focused rice bowl with simple vegetables.",
+      "ingredients": [
+        {
+          "name": "chicken breast",
+          "quantity": 1.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "rice",
+          "quantity": 1.0,
+          "unit": "cups",
+          "optional": false
+        },
+        {
+          "name": "broccoli",
+          "quantity": 1.0,
+          "unit": "head",
+          "optional": false
+        },
+        {
+          "name": "soy sauce",
+          "quantity": 0.1,
+          "unit": "bottle",
+          "optional": false
+        }
+      ],
+      "instructions": [
+        "Cook the rice and pan-sear the chicken.",
+        "Steam the broccoli and finish with soy sauce."
+      ],
+      "tags": [
+        "high-protein"
+      ],
+      "calories": 610,
+      "protein_g": 42,
+      "cuisine": "asian",
+      "source_url": null,
+      "source_title": null
+    },
+    {
+      "id": "garden_salad",
+      "name": "Garden Salad",
+      "description": "A light salad designed to use the most perishable produce first.",
+      "ingredients": [
+        {
+          "name": "lettuce",
+          "quantity": 1.0,
+          "unit": "head",
+          "optional": false
+        },
+        {
+          "name": "tomatoes",
+          "quantity": 1.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "cucumber",
+          "quantity": 1.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "yogurt",
+          "quantity": 0.5,
+          "unit": "cups",
+          "optional": true
+        }
+      ],
+      "instructions": [
+        "Chop the vegetables.",
+        "Toss together and add yogurt dressing if available."
+      ],
+      "tags": [
+        "vegetable-forward",
+        "light"
+      ],
+      "calories": 220,
+      "protein_g": 8,
+      "cuisine": "mediterranean",
+      "source_url": null,
+      "source_title": null
+    },
+    {
+      "id": "tomato_pasta",
+      "name": "Tomato Pasta",
+      "description": "Simple pasta with tomatoes and onion.",
+      "ingredients": [
+        {
+          "name": "pasta",
+          "quantity": 1.0,
+          "unit": "pack",
+          "optional": false
+        },
+        {
+          "name": "tomatoes",
+          "quantity": 2.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "onion",
+          "quantity": 1.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "olive oil",
+          "quantity": 0.1,
+          "unit": "bottle",
+          "optional": false
+        }
+      ],
+      "instructions": [
+        "Cook the pasta.",
+        "Saute onion and tomato in olive oil.",
+        "Combine and serve."
+      ],
+      "tags": [
+        "comfort"
+      ],
+      "calories": 540,
+      "protein_g": 16,
+      "cuisine": "italian",
+      "source_url": null,
+      "source_title": null
+    },
+    {
+      "id": "veggie_omelette",
+      "name": "Veggie Omelette",
+      "description": "Fast, protein-rich omelette that helps use spinach before it expires.",
+      "ingredients": [
+        {
+          "name": "eggs",
+          "quantity": 2.0,
+          "unit": "pcs",
+          "optional": false
+        },
+        {
+          "name": "spinach",
+          "quantity": 1.0,
+          "unit": "bunch",
+          "optional": false
+        },
+        {
+          "name": "milk",
+          "quantity": 0.2,
+          "unit": "litre",
+          "optional": false
+        },
+        {
+          "name": "onion",
+          "quantity": 0.5,
+          "unit": "pcs",
+          "optional": true
+        }
+      ],
+      "instructions": [
+        "Whisk eggs and milk together.",
+        "Cook spinach and onion briefly, then add egg mixture.",
+        "Fold and serve."
+      ],
+      "tags": [
+        "quick",
+        "high-protein",
+        "vegetable-forward"
+      ],
+      "calories": 420,
+      "protein_g": 27,
+      "cuisine": "comfort",
+      "source_url": null,
+      "source_title": null
+    }
+  ],
+  "utilities": {
+    "water_level_percent": 58,
+    "ice_level_percent": 32
+  },
+  "nutrition_profile": {
+    "daily_calorie_target": 2200,
+    "daily_protein_target_g": 110,
+    "hydration_target_l": 2.5,
+    "dietary_preferences": [
+      "balanced",
+      "high-protein"
+    ]
+  },
+  "meal_history": [
+    {
+      "recipe_id": "veggie_omelette",
+      "recipe_name": "Veggie Omelette",
+      "cooked_at": "2026-03-23T06:45:39.190188Z",
+      "calories": 420,
+      "protein_g": 27,
+      "tags": [
+        "quick",
+        "high-protein",
+        "vegetable-forward"
+      ],
+      "cuisine": "comfort"
+    },
+    {
+      "recipe_id": "banana_yogurt_smoothie",
+      "recipe_name": "Banana Yogurt Smoothie",
+      "cooked_at": "2026-03-22T06:45:39.190217Z",
+      "calories": 280,
+      "protein_g": 14,
+      "tags": [
+        "quick",
+        "refreshing"
+      ],
+      "cuisine": "breakfast"
+    }
+  ],
+  "grocery_orders": [],
+  "pending_grocery_list": [],
+  "behaviour": {
+    "command_usage": {
+      "inventory_check": 5,
+      "recipe_query": 2,
+      "unknown": 4
+    },
+    "recipe_requests": {
+      "veggie_omelette": 1,
+      "tomato_pasta": 1
+    },
+    "cooked_recipes": {
+      "veggie_omelette": 1,
+      "banana_yogurt_smoothie": 1
+    },
+    "favourite_ingredients": {
+      "eggs": 1,
+      "spinach": 1,
+      "bananas": 1,
+      "yogurt": 1,
+      "milk": 1
+    },
+    "active_periods": {
+      "morning": 4,
+      "afternoon": 7,
+      "evening": 1
+    },
+    "preferred_cuisines": {
+      "comfort": 1,
+      "breakfast": 1
+    },
+    "disliked_ingredients": []
+  },
+  "conversation_memory": {
+    "460723160": {
+      "user_id": "460723160",
+      "active_session_id": "1810da53a164",
+      "session_started_at": "2026-03-24T06:47:45.940556Z",
+      "last_activity_at": "2026-03-24T07:19:03.455373Z",
+      "carryover_context": "Previous session b6543327d871 ran from 2026-03-24T06:47:07.798724 to 2026-03-24T06:47:07.900199.\nRecent user intents: Test | are you there\nPrevious session 161472048959 ran from 2026-03-24T06:47:08.028136 to 2026-03-24T06:47:08.043704.\nRecent fridge responses: Started a new fridge session. I kept a compact summary of the previous conversation and moved into session `161472048959`.",
+      "current_status": "",
+      "turns": [
+        {
+          "role": "assistant",
+          "text": "Started a new fridge session. I kept a compact summary of the previous conversation and moved into session `1810da53a164`.",
+          "timestamp": "2026-03-24T06:47:45.942550Z"
+        },
+        {
+          "role": "user",
+          "text": "What ingredients do I have in fridge?",
+          "timestamp": "2026-03-24T06:51:05.809130Z"
+        },
+        {
+          "role": "assistant",
+          "text": "Current inventory:\n- bananas: 4 pcs, expires 2026-03-27\n- chicken breast: 1 pcs, expires 2026-03-26\n- eggs: 5 pcs, expires 2026-03-29\n- lettuce: 1 head, expires 2026-03-26\n- milk: 0.8 litre, expires 2026-03-28\n- onion: 2 pcs, expires 2026-04-03\n- pasta: 1 pack\n- rice: 3 cups\n- spinach: 1 bunch, expires 2026-03-26\n- tomatoes: 3 pcs, expires 2026-03-28\n- yogurt: 2 cups, expires 2026-03-30\nExpiring soon: bananas, chicken breast, lettuce, spinach.",
+          "timestamp": "2026-03-24T06:51:05.848023Z"
+        },
+        {
+          "role": "user",
+          "text": "Delete all inventory",
+          "timestamp": "2026-03-24T06:51:58.791827Z"
+        },
+        {
+          "role": "assistant",
+          "text": "Current inventory:\n- bananas: 4 pcs, expires 2026-03-27\n- chicken breast: 1 pcs, expires 2026-03-26\n- eggs: 5 pcs, expires 2026-03-29\n- lettuce: 1 head, expires 2026-03-26\n- milk: 0.8 litre, expires 2026-03-28\n- onion: 2 pcs, expires 2026-04-03\n- pasta: 1 pack\n- rice: 3 cups\n- spinach: 1 bunch, expires 2026-03-26\n- tomatoes: 3 pcs, expires 2026-03-28\n- yogurt: 2 cups, expires 2026-03-30\nExpiring soon: bananas, chicken breast, lettuce, spinach.",
+          "timestamp": "2026-03-24T06:51:58.823162Z"
+        },
+        {
+          "role": "user",
+          "text": "Delete all inventory",
+          "timestamp": "2026-03-24T06:53:29.316328Z"
+        },
+        {
+          "role": "assistant",
+          "text": "Current inventory:\n- bananas: 4 pcs, expires 2026-03-27\n- chicken breast: 1 pcs, expires 2026-03-26\n- eggs: 5 pcs, expires 2026-03-29\n- lettuce: 1 head, expires 2026-03-26\n- milk: 0.8 litre, expires 2026-03-28\n- onion: 2 pcs, expires 2026-04-03\n- pasta: 1 pack\n- rice: 3 cups\n- spinach: 1 bunch, expires 2026-03-26\n- tomatoes: 3 pcs, expires 2026-03-28\n- yogurt: 2 cups, expires 2026-03-30\nExpiring soon: bananas, chicken breast, lettuce, spinach.",
+          "timestamp": "2026-03-24T06:53:29.344535Z"
+        },
+        {
+          "role": "user",
+          "text": "Hello",
+          "timestamp": "2026-03-24T07:18:29.024980Z"
+        },
+        {
+          "role": "assistant",
+          "text": "Hi! 👋 I’m here.\n\nRight now you’ve got: bananas, chicken breast, eggs, lettuce, milk, onion, pasta, rice, spinach, tomatoes, yogurt.  \nQuick note: **chicken breast, spinach, lettuce** are **expiring soon**—best to use them today/tomorrow.\n\nWant me to suggest **2–3 meals** you can make from what’s expiring first?",
+          "timestamp": "2026-03-24T07:18:31.492327Z"
+        },
+        {
+          "role": "user",
+          "text": "Delete all inventory",
+          "timestamp": "2026-03-24T07:18:51.120729Z"
+        },
+        {
+          "role": "assistant",
+          "text": "✅ Done — I deleted **all inventory**.",
+          "timestamp": "2026-03-24T07:18:54.795699Z"
+        },
+        {
+          "role": "user",
+          "text": "What do I have in the fridge?",
+          "timestamp": "2026-03-24T07:19:03.440831Z"
+        },
+        {
+          "role": "assistant",
+          "text": "Current inventory:",
+          "timestamp": "2026-03-24T07:19:03.455373Z"
+        }
+      ],
+      "completed_session_summaries": [
+        "Previous session b6543327d871 ran from 2026-03-24T06:47:07.798724 to 2026-03-24T06:47:07.900199.\nRecent user intents: Test | are you there",
+        "Previous session 161472048959 ran from 2026-03-24T06:47:08.028136 to 2026-03-24T06:47:08.043704.\nRecent fridge responses: Started a new fridge session. I kept a compact summary of the previous conversation and moved into session `161472048959`."
+      ]
+    }
+  },
+  "recent_events": [
+    {
+      "timestamp": "2026-03-24T07:19:03.455413Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:19:03.446994Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: inventory_check.",
+      "changes": {
+        "command": "inventory_check",
+        "period": "morning"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:19:03.440898Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:18:54.795754Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:18:52.961318Z",
+      "agent": "inventory_agent",
+      "action": "clear_inventory",
+      "summary": "Cleared all inventory items.",
+      "changes": {
+        "removed_count": 11
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:18:51.120787Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:18:31.492403Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:18:29.028858Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: unknown.",
+      "changes": {
+        "command": "unknown",
+        "period": "morning"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T07:18:29.025083Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:53:29.344564Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:53:29.340094Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: inventory_check.",
+      "changes": {
+        "command": "inventory_check",
+        "period": "afternoon"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:53:29.316394Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:51:58.823197Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:51:58.819358Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: inventory_check.",
+      "changes": {
+        "command": "inventory_check",
+        "period": "afternoon"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:51:58.791900Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:51:05.848053Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:51:05.843805Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: inventory_check.",
+      "changes": {
+        "command": "inventory_check",
+        "period": "afternoon"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:51:05.809223Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:45.942576Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "1810da53a164",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:45.940639Z",
+      "agent": "conversation_manager",
+      "action": "roll_session",
+      "summary": "Rolled conversation session for 460723160 due to manual_reset.",
+      "changes": {
+        "user_id": "460723160",
+        "reason": "manual_reset",
+        "previous_session_id": "161472048959",
+        "new_session_id": "1810da53a164"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:08.043756Z",
+      "agent": "conversation_manager",
+      "action": "register_assistant_turn",
+      "summary": "Recorded an assistant turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "161472048959",
+        "turn_role": "assistant"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:08.038331Z",
+      "agent": "conversation_manager",
+      "action": "roll_session",
+      "summary": "Rolled conversation session for 460723160 due to manual_reset.",
+      "changes": {
+        "user_id": "460723160",
+        "reason": "manual_reset",
+        "previous_session_id": "b6543327d871",
+        "new_session_id": "161472048959"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:08.031355Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: unknown.",
+      "changes": {
+        "command": "unknown",
+        "period": "afternoon"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:08.028466Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "b6543327d871",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:07.965221Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: unknown.",
+      "changes": {
+        "command": "unknown",
+        "period": "afternoon"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:07.900284Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "b6543327d871",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:07.886991Z",
+      "agent": "behaviour_agent",
+      "action": "record_command",
+      "summary": "Recorded user command: unknown.",
+      "changes": {
+        "command": "unknown",
+        "period": "afternoon"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:07.882533Z",
+      "agent": "conversation_manager",
+      "action": "register_user_turn",
+      "summary": "Recorded a user turn for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "b6543327d871",
+        "turn_role": "user"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:47:07.799042Z",
+      "agent": "conversation_manager",
+      "action": "create_session",
+      "summary": "Created a new conversation session for 460723160.",
+      "changes": {
+        "user_id": "460723160",
+        "session_id": "b6543327d871",
+        "reason": "initial"
+      }
+    },
+    {
+      "timestamp": "2026-03-24T06:45:39.190493Z",
+      "agent": "bootstrap",
+      "action": "seed_context",
+      "summary": "Loaded initial fridge inventory, recipes, and user profile.",
+      "changes": {
+        "inventory_items": 11,
+        "recipes": 5
+      }
+    }
+  ]
+}

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import uuid4
 
 from app.agents.behaviour import BehaviourAgent
 from app.agents.inventory import InventoryAgent
 from app.agents.recipe import RecipeAgent
 from app.core.context_store import ContextStore
+from app.core.time_utils import utc_now
 from app.models.domain import GroceryLine, GroceryOrder
 
 
@@ -63,7 +63,7 @@ class GroceryAgent:
         order = GroceryOrder(
             id=provider_response["order_id"],
             items=items,
-            created_at=datetime.utcnow(),
+            created_at=utc_now(),
             status="confirmed",
             source=source,
             vendor=provider_response["vendor"],
