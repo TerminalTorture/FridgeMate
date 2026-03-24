@@ -109,6 +109,9 @@ Example cook flow:
 - `GET /utilities`
 - `POST /utilities`
 - `POST /telegram/mock`
+- `POST /telegram/webhook`
+- `GET /telegram/webhook/info`
+- `POST /telegram/webhook/register`
 
 Example commands:
 
@@ -138,6 +141,7 @@ Then set:
 TELEGRAM_BOT_TOKEN=your-real-telegram-bot-token
 TELEGRAM_CHAT_ID=optional-default-chat-id
 TELEGRAM_WEBHOOK_SECRET=optional-webhook-shared-secret
+TELEGRAM_WEBHOOK_URL=https://your-public-domain.example.com/telegram/webhook
 
 LLM_API_KEY=your-real-llm-api-key
 LLM_MODEL=gpt-4.1-mini
@@ -149,7 +153,9 @@ Notes:
 - The app reads `.env` automatically at startup through [app/core/settings.py](/c:/Users/LeeJR/OneDrive%20-%20Nanyang%20Technological%20University/School/Year%204%20Semester%202/CZ4052%20Cloud%20Computing-ML-LP/SaaS/app/core/settings.py).
 - `.env` is ignored by git, so your secrets stay out of source control.
 - `GET /config/status` confirms whether Telegram and LLM credentials were detected.
-- The current prototype still uses the mock route `POST /telegram/mock`; the real Telegram Bot API is not wired yet.
+- Real Telegram webhook support is available at `POST /telegram/webhook`.
+- Register the webhook with `POST /telegram/webhook/register` after your public URL is reachable from Telegram.
+- `POST /telegram/mock` is still available for local testing without Telegram.
 
 ## Example Interaction Flow
 

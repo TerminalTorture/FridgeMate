@@ -47,6 +47,11 @@ class TelegramMessageResponse(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class TelegramWebhookRegistrationRequest(BaseModel):
+    url: str | None = None
+    drop_pending_updates: bool = True
+
+
 class RecipeSuggestion(BaseModel):
     recipe_id: str
     name: str

@@ -27,6 +27,7 @@ class Settings:
     telegram_bot_token: str | None
     telegram_chat_id: str | None
     telegram_webhook_secret: str | None
+    telegram_webhook_url: str | None
     llm_api_key: str | None
     llm_model: str
     llm_base_url: str | None
@@ -47,6 +48,7 @@ def get_settings() -> Settings:
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
         telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET"),
+        telegram_webhook_url=os.getenv("TELEGRAM_WEBHOOK_URL"),
         llm_api_key=os.getenv("LLM_API_KEY"),
         llm_model=os.getenv("LLM_MODEL", "gpt-4.1-mini"),
         llm_base_url=os.getenv("LLM_BASE_URL"),

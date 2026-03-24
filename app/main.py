@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 
 from app.core.container import build_container
 from app.core.settings import get_settings
@@ -8,6 +8,7 @@ from app.models.api import (
     GroceryOrderRequest,
     InventoryItemInput,
     TelegramMessageRequest,
+    TelegramWebhookRegistrationRequest,
     UtilityUpdateRequest,
 )
 from app.models.domain import GroceryLine, InventoryItem
@@ -43,10 +44,10 @@ def config_status() -> dict[str, object]:
         "telegram_configured": settings.telegram_configured,
         "llm_configured": settings.llm_configured,
         "llm_model": settings.llm_model,
-        "telegram_mode": "mock_only",
+        "telegram_mode": "webhook_ready",
         "notes": [
             "Secrets are loaded from environment variables or a repo-root .env file.",
-            "The current prototype only mocks Telegram messaging via /telegram/mock.",
+            "Telegram now supports a real webhook endpoint at /telegram/webhook.",
         ],
     }
 
@@ -155,3 +156,45 @@ def telegram_mock(payload: TelegramMessageRequest):
         user_id=payload.user_id,
         message=payload.message,
     )
+
+
+@app.post("/telegram/webhook")
+def telegram_webhook(
+    update: dict[str, object],
+    x_telegram_bot_api_secret_token: str | None = Header(
+        default=None,
+        alias="X-Telegram-Bot-Api-Secret-Token",
+    ),
+):
+    try:
+        return container.telegram_service.handle_webhook(
+            update=update,
+            secret_token=x_telegram_bot_api_secret_token,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/telegram/webhook/info")
+def telegram_webhook_info():
+    try:
+        return container.telegram_service.get_webhook_info()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/telegram/webhook/register")
+def register_telegram_webhook(payload: TelegramWebhookRegistrationRequest):
+    try:
+        return container.telegram_service.register_webhook(
+            url=payload.url,
+            drop_pending_updates=payload.drop_pending_updates,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -10,7 +10,9 @@ from app.agents.recipe import RecipeAgent
 from app.agents.utility import UtilityAgent
 from app.core.bootstrap import build_initial_context
 from app.core.context_store import ContextStore
+from app.core.llm_service import LLMService
 from app.core.orchestrator import MCPFridgeOrchestrator
+from app.core.telegram_service import TelegramService
 
 
 @dataclass
@@ -23,6 +25,8 @@ class AppContainer:
     behaviour_agent: BehaviourAgent
     utility_agent: UtilityAgent
     orchestrator: MCPFridgeOrchestrator
+    llm_service: LLMService
+    telegram_service: TelegramService
 
 
 def build_container() -> AppContainer:
@@ -46,6 +50,11 @@ def build_container() -> AppContainer:
         behaviour_agent=behaviour_agent,
         utility_agent=utility_agent,
     )
+    llm_service = LLMService(store=store)
+    telegram_service = TelegramService(
+        orchestrator=orchestrator,
+        llm_service=llm_service,
+    )
 
     return AppContainer(
         store=store,
@@ -56,5 +65,6 @@ def build_container() -> AppContainer:
         behaviour_agent=behaviour_agent,
         utility_agent=utility_agent,
         orchestrator=orchestrator,
+        llm_service=llm_service,
+        telegram_service=telegram_service,
     )
-
