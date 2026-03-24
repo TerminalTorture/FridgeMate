@@ -1,0 +1,2 @@
+"""MCP Fridge prototype package."""
+
