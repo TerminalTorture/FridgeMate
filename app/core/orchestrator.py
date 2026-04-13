@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import re
+from typing import cast
+
 from app.agents.behaviour import BehaviourAgent
 from app.agents.grocery import GroceryAgent
 from app.agents.inventory import InventoryAgent
 from app.agents.nutrition import NutritionAgent
 from app.agents.recipe import RecipeAgent
 from app.agents.utility import UtilityAgent
+from app.models.domain import GroceryLine, GroceryOrder, UtilityLevels
+
+__all__ = ["MCPFridgeOrchestrator", "FridgeOrchestrator"]
 
 
 class MCPFridgeOrchestrator:
@@ -54,6 +60,7 @@ class MCPFridgeOrchestrator:
 
     def handle_telegram_message(self, user_id: str, message: str) -> dict[str, object]:
         text = message.strip().lower()
+        words = self._word_set(text)
 
         if "what can i cook" in text or "what should i cook" in text:
             self.behaviour_agent.record_command("recipe_query")
@@ -75,7 +82,7 @@ class MCPFridgeOrchestrator:
                 "data": {"suggestions": suggestions},
             }
 
-        if "inventory" in text or "fridge" in text:
+        if "inventory" in words or "fridge" in words:
             self.behaviour_agent.record_command("inventory_check")
             inventory = self.inventory_agent.get_inventory()
             expiring = self.inventory_agent.expiring_soon(days=3)
@@ -96,6 +103,36 @@ class MCPFridgeOrchestrator:
                 "data": {"inventory": inventory, "expiring_soon": expiring},
             }
 
+        if words & {"calories", "calorie", "macros", "macro", "protein", "nutrition"}:
+            self.behaviour_agent.record_command("nutrition_query")
+            recipe = self.recipe_agent.match_recipe_from_text(text)
+            if recipe is not None:
+                reply = (
+                    f"{recipe.name} for 1 serving is about {recipe.calories} kcal "
+                    f"and {recipe.protein_g} g protein."
+                )
+                return {
+                    "user_id": user_id,
+                    "intent": "nutrition_query",
+                    "reply": reply,
+                    "data": {
+                        "recipe_id": recipe.id,
+                        "calories": recipe.calories,
+                        "protein_g": recipe.protein_g,
+                    },
+                }
+
+            summary = self.nutrition_agent.get_summary()
+            return {
+                "user_id": user_id,
+                "intent": "unknown",
+                "reply": (
+                    "I can help with calories and macros, but I need the exact dish or ingredients. "
+                    "Tell me the cooked portion or recipe name and I’ll estimate it."
+                ),
+                "data": {"nutrition_summary": summary},
+            }
+
         if "order groceries" in text or "buy groceries" in text:
             self.behaviour_agent.record_command("grocery_order")
             recipe = self.recipe_agent.match_recipe_from_text(text)
@@ -105,17 +142,20 @@ class MCPFridgeOrchestrator:
                 else self.grocery_agent.order_staple_restock()
             )
 
-            if result["order"] is None:
-                reply = result["message"]
+            order = cast(GroceryOrder | None, result.get("order"))
+            items = cast(list[GroceryLine], result.get("items", []))
+            message_text = str(result.get("message") or "")
+
+            if order is None:
+                reply = message_text
             else:
-                order = result["order"]
-                items = ", ".join(
+                items_text = ", ".join(
                     f"{item.name} ({item.quantity:g} {item.unit})"
-                    for item in result["items"]
+                    for item in items
                 )
                 reply = (
                     f"Placed order {order.id} with {order.vendor}. "
-                    f"ETA {order.eta_minutes} minutes. Items: {items}."
+                    f"ETA {order.eta_minutes} minutes. Items: {items_text}."
                 )
 
             return {
@@ -138,9 +178,10 @@ class MCPFridgeOrchestrator:
 
             result = self.cook_recipe(recipe.id)
             if result["status"] == "blocked":
+                missing_items = cast(list[GroceryLine], result.get("missing_items", []))
                 missing = ", ".join(
                     f"{item.name} ({item.quantity:g} {item.unit})"
-                    for item in result["missing_items"]
+                    for item in missing_items
                 )
                 reply = f"Cannot cook {recipe.name} yet. Missing: {missing}."
             else:
@@ -153,11 +194,11 @@ class MCPFridgeOrchestrator:
                 "data": result,
             }
 
-        if "water" in text or "ice" in text or "utilities" in text:
+        if words & {"water", "ice", "utilities", "utility"}:
             self.behaviour_agent.record_command("utility_check")
             status = self.utility_agent.get_status()
-            utilities = status["utilities"]
-            alerts = status["alerts"]
+            utilities = cast(UtilityLevels, status.get("utilities"))
+            alerts = cast(list[str], status.get("alerts", []))
             reply = (
                 f"Water: {utilities.water_level_percent}%, "
                 f"Ice: {utilities.ice_level_percent}%."
@@ -182,3 +223,8 @@ class MCPFridgeOrchestrator:
             "data": {},
         }
 
+    @staticmethod
+    def _word_set(text: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+FridgeOrchestrator = MCPFridgeOrchestrator

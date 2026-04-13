@@ -40,6 +40,9 @@ class RecipeAgent:
             key=lambda suggestion: (
                 suggestion.can_make_now,
                 suggestion.coverage,
+                -suggestion.prep_minutes,
+                -suggestion.step_count,
+                -suggestion.effort_score,
                 -len(suggestion.missing_items),
             ),
             reverse=True,
@@ -121,6 +124,10 @@ class RecipeAgent:
             missing_items=missing_items,
             calories=recipe.calories,
             protein_g=recipe.protein_g,
+            prep_minutes=recipe.prep_minutes,
+            step_count=recipe.step_count,
+            effort_score=recipe.effort_score,
+            suitable_when_tired=recipe.suitable_when_tired,
             tags=recipe.tags,
             rationale=rationale,
         )

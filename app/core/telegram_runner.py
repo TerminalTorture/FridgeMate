@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
+import asyncio
 import threading
 import time
 
@@ -14,21 +14,16 @@ class TelegramPollingRunner:
         self.worker_count = max(worker_count, 1)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._offset: int | None = None
-        self._executor: ThreadPoolExecutor | None = None
         self._lock = threading.Lock()
-        self._futures: set[Future[object]] = set()
+        self._tasks: set[asyncio.Task[object]] = set()
         self._last_poll_at: str | None = None
+        self._offset: int | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
 
         self._stop_event.clear()
-        self._executor = ThreadPoolExecutor(
-            max_workers=self.worker_count,
-            thread_name_prefix="telegram-worker",
-        )
         self._thread = threading.Thread(target=self._run, name="telegram-polling", daemon=True)
         self._thread.start()
 
@@ -36,13 +31,10 @@ class TelegramPollingRunner:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=False)
-            self._executor = None
 
     def status(self) -> dict[str, object]:
         with self._lock:
-            in_flight = len(self._futures)
+            in_flight = len(self._tasks)
         return {
             "running": bool(self._thread and self._thread.is_alive()),
             "offset": self._offset,
@@ -53,9 +45,12 @@ class TelegramPollingRunner:
         }
 
     def _run(self) -> None:
+        asyncio.run(self._run_async())
+
+    async def _run_async(self) -> None:
         try:
             # Polling and webhook cannot be used together for the same bot.
-            self.telegram_service.delete_webhook(drop_pending_updates=False)
+            await self.telegram_service.delete_webhook_async(drop_pending_updates=False)
         except Exception as exc:
             self.telegram_service.debug_log.record(
                 service="telegram",
@@ -66,10 +61,11 @@ class TelegramPollingRunner:
             )
 
         timeout_seconds = self.telegram_service.settings.telegram_poll_timeout_seconds
+        semaphore = asyncio.Semaphore(self.worker_count)
         while not self._stop_event.is_set():
             try:
-                self._prune_futures()
-                response = self.telegram_service.get_updates(
+                self._prune_tasks()
+                response = await self.telegram_service.get_updates_async(
                     offset=self._offset,
                     timeout_seconds=timeout_seconds,
                 )
@@ -87,7 +83,7 @@ class TelegramPollingRunner:
                     update_id = update.get("update_id")
                     if isinstance(update_id, int):
                         self._offset = update_id + 1
-                    self._submit_update(update, update_id)
+                    self._submit_update(update, update_id, semaphore)
             except Exception as exc:
                 self.telegram_service.debug_log.record(
                     service="telegram",
@@ -96,43 +92,50 @@ class TelegramPollingRunner:
                     summary="Polling loop failed.",
                     metadata={"error": str(exc)},
                 )
-                time.sleep(2)
+                await asyncio.sleep(2)
 
-        self._prune_futures(wait=True)
+        await self._drain_tasks()
 
-    def _submit_update(self, update: dict[str, object], update_id: object) -> None:
-        if self._executor is None:
-            return
-
-        future = self._executor.submit(self._process_update_safely, update, update_id)
+    def _submit_update(self, update: dict[str, object], update_id: object, semaphore: asyncio.Semaphore) -> None:
+        task = asyncio.create_task(self._process_update_safely(update, update_id, semaphore))
         with self._lock:
-            self._futures.add(future)
-        future.add_done_callback(self._on_future_done)
+            self._tasks.add(task)
+        task.add_done_callback(self._on_task_done)
 
-    def _process_update_safely(self, update: dict[str, object], update_id: object) -> None:
-        try:
-            self.telegram_service.process_update(update)
-        except Exception as exc:
-            self.telegram_service.debug_log.record(
-                service="telegram",
-                direction="internal",
-                status="error",
-                summary="Failed to process polled update.",
-                metadata={"update_id": update_id, "error": str(exc)},
-            )
+    async def _process_update_safely(
+        self,
+        update: dict[str, object],
+        update_id: object,
+        semaphore: asyncio.Semaphore,
+    ) -> None:
+        async with semaphore:
+            try:
+                await self.telegram_service.process_update_async(update)
+            except Exception as exc:
+                self.telegram_service.debug_log.record(
+                    service="telegram",
+                    direction="internal",
+                    status="error",
+                    summary="Failed to process polled update.",
+                    metadata={"update_id": update_id, "error": str(exc)},
+                )
 
-    def _on_future_done(self, future: Future[object]) -> None:
+    def _on_task_done(self, task: asyncio.Task[object]) -> None:
         with self._lock:
-            self._futures.discard(future)
+            self._tasks.discard(task)
 
-    def _prune_futures(self, wait: bool = False) -> None:
+    def _prune_tasks(self) -> None:
         with self._lock:
-            futures = list(self._futures)
-        for future in futures:
-            if wait:
+            tasks = list(self._tasks)
+        for task in tasks:
+            if task.done():
                 try:
-                    future.result(timeout=1)
+                    task.result()
                 except Exception:
                     pass
-            elif not future.done():
-                continue
+
+    async def _drain_tasks(self) -> None:
+        with self._lock:
+            tasks = list(self._tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

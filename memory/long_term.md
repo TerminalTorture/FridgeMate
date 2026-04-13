@@ -1,0 +1,6 @@
+- Staple items are to be learned.
+- Preferred brands are to be learned.
+- Recurring shopping habits are to be learned.
+- Usual meal ingredients are to be learned.
+- Restock thresholds are tracked in inventory memory when available.
+- User dislikes are to be learned.

@@ -1,229 +1,318 @@
-# MCP Fridge Prototype
+# FridgeMate MCP Fridge Prototype
 
-`MCP Fridge` is a small FastAPI-based multi-agent prototype for food, nutrition, and household management. It uses a shared context store as MCP-style memory so each agent can read the same state and write back structured updates.
+`FridgeMate` is a FastAPI-based household assistant with a SQL-first runtime store, batch-level fridge inventory, recipe matching, conversation memory, diagnostics, and a push-first decision engine for low-effort eating.
 
-## Architecture Diagram
+## What Changed
 
-```text
-                    +----------------------------------+
-                    | Telegram / WhatsApp Interface    |
-                    | (Telegram mocked via API route)  |
-                    +----------------+-----------------+
-                                     |
-                                     v
-                    +----------------------------------+
-                    | FastAPI App + Orchestrator       |
-                    | - routes                         |
-                    | - intent handling                |
-                    | - cross-agent workflows          |
-                    +----------------+-----------------+
-                                     |
-                                     v
-                    +----------------------------------+
-                    | Shared Context Store             |
-                    | - inventory                      |
-                    | - recipes                        |
-                    | - shopping list / orders         |
-                    | - utilities                      |
-                    | - meal history                   |
-                    | - behaviour profile              |
-                    | - conversation memory            |
-                    | - recent events                  |
-                    +----------------+-----------------+
-                                     |
-         +-------------+-------------+-------------+-------------+-------------+-------------+
-         |             |             |             |             |             |             |
-         v             v             v             v             v             v
-+----------------+ +----------------+ +----------------+ +----------------+ +----------------+ +----------------+
-| Inventory Agent| |  Recipe Agent  | | Grocery Agent  | | Nutrition Ag. | | Behaviour Ag. | | Utility Agent |
-| stock/expiry   | | meal matching  | | order planning | | meal tracking  | | habit learning | | water / ice   |
-+----------------+ +----------------+ +----------------+ +----------------+ +----------------+ +----------------+
-```
+- Operational state now lives in SQLite by default through SQLAlchemy.
+- Alembic is included for schema setup and future migrations.
+- Inventory is modeled as canonical items plus physical batches with `purchased_at`, `expires_on`, `quantity`, `location`, and confidence.
+- Recipes, meal history, grocery orders, conversation sessions, heartbeat settings, diagnostics snapshots, and runtime events persist in SQL.
+- The assistant now separates user-editable preferences, temporary state overrides, and hidden learned decision signals.
+- Heartbeat now runs the adaptive decision engine instead of sending a generic dinner check every time.
+- Telegram supports lightweight natural-language steering such as `I'm exhausted today`, `I only want 5-minute meals`, and `stop messaging me at night`.
+- Proactive Telegram nudges now include inline actions such as `Cook this`, `Show easier option`, `Draft shopping list`, `Ignore tonight`, `Not home`, and `Ordered food`.
+- The app can seed roughly six months of daily household activity for realistic demos and testing.
+- Markdown files at the repo root still shape prompt behavior: `identity.md`, `soul.md`, `user.md`, `bootstrap.md`, `heartbeat.md`, and `memory/`.
 
-## Folder Structure
+## Persistence Model
 
-```text
-SaaS/
-|-- README.md
-|-- requirements.txt
-|-- .gitignore
-`-- app/
-    |-- main.py
-    |-- agents/
-    |   |-- behaviour.py
-    |   |-- grocery.py
-    |   |-- inventory.py
-    |   |-- nutrition.py
-    |   |-- recipe.py
-    |   `-- utility.py
-    |-- core/
-    |   |-- bootstrap.py
-    |   |-- conversation_manager.py
-    |   |-- container.py
-    |   |-- context_store.py
-    |   |-- telegram_runner.py
-    |   `-- orchestrator.py
-    `-- models/
-        |-- api.py
-        `-- domain.py
-```
+FridgeMate separates prompt/bootstrap assets from operational data:
 
-## Shared Context and Data Flow
+- Markdown bootstrap: assistant identity, tone, user profile, durable notes, daily memory
+- SQL runtime store: inventory, batches, recipes, meals, grocery orders, sessions, diagnostics, heartbeat preferences, runtime events
+- Legacy JSON path: `MEMORY_STORE_PATH` is only kept for one-time import compatibility
 
-- `ContextStore.snapshot()` gives agents a deep-copy read view of the current state.
-- `ContextStore.update(...)` applies changes with agent attribution and appends an event log entry.
-- Shared context persists to `data/fridge_memory.json` by default, so inventory, expiry dates, shopping list, recipes, behaviour, and conversation memory survive restarts.
-- The orchestrator coordinates multi-agent workflows such as cooking a recipe or responding to a Telegram-style message.
-- `ConversationManager` keeps one active Telegram session per user, compacts old conversations on `/new` or after inactivity, and feeds the carryover summary back into the LLM.
+Main SQL tables:
 
-Example cook flow:
+- `inventory_items`
+- `inventory_batches`
+- `recipes`
+- `recipe_ingredients`
+- `meal_records`
+- `grocery_orders`
+- `grocery_order_lines`
+- `pending_grocery_items`
+- `conversation_sessions`
+- `conversation_turns`
+- `conversation_summaries`
+- `heartbeat_preferences`
+- `user_preferences`
+- `temporary_state_overrides`
+- `decision_profiles`
+- `assistant_interventions`
+- `diagnostics_snapshots`
+- `runtime_events`
 
-1. User calls `POST /recipes/{recipe_id}/cook`
-2. `RecipeAgent` resolves the recipe
-3. `InventoryAgent` checks and consumes ingredients
-4. `NutritionAgent` logs the meal
-5. `BehaviourAgent` updates preferences and usage patterns
-6. `UtilityAgent` lowers water/ice levels
-7. Shared context version and event log are updated after each write
+## Setup
 
-## Key Files
-
-- [app/main.py]
-- [app/core/context_store.py]
-- [app/core/conversation_manager.py]
-- [app/core/orchestrator.py]
-- [app/core/bootstrap.py]
-- [app/agents/inventory.py]
-- [app/agents/recipe.py]
-- [app/agents/grocery.py]
-## Example API Endpoints
-
-- `GET /health`
-- `GET /context`
-- `GET /memory`
-- `GET /sessions/{user_id}`
-- `GET /inventory`
-- `POST /inventory/items`
-- `GET /recipes`
-- `GET /recipes/suggestions`
-- `POST /recipes/online/search`
-- `POST /recipes/import`
-- `POST /recipes/{recipe_id}/cook`
-- `GET /groceries/pending`
-- `POST /groceries/order`
-- `POST /groceries/order/recipe/{recipe_id}`
-- `GET /nutrition/summary`
-- `GET /behaviour/summary`
-- `GET /utilities`
-- `POST /utilities`
-- `POST /telegram/mock`
-- `POST /telegram/webhook`
-- `GET /telegram/webhook/info`
-- `POST /telegram/webhook/register`
-- `GET /mcp/tools`
-- `POST /mcp/call`
-
-Example commands:
+1. Install dependencies:
 
 ```bash
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+python -m pip install -r requirements.txt
+```
 
+2. Copy `.env.example` to `.env` and set your secrets.
+
+3. Create the schema:
+
+```bash
+alembic upgrade head
+```
+
+4. Optionally seed six months of history:
+
+```bash
+python scripts/seed_history.py
+```
+
+5. Start the app:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Default SQL settings:
+
+```bash
+DATABASE_URL=sqlite:///data/fridgemate.db
+SQL_ECHO=0
+SEED_HISTORY_ON_STARTUP=1
+SEED_HISTORY_DAYS=180
+SEED_HISTORY_SEED=4052
+```
+
+`SEED_HISTORY_ON_STARTUP=1` means an empty database will auto-bootstrap with synthetic usage history. Set it to `0` if you want a minimal import-only startup.
+
+## Historical Data
+
+The synthetic history generator is deterministic. With the same `SEED_HISTORY_SEED`, you get the same purchase dates, expiry dates, meal cadence, low-stock events, and restock patterns.
+
+The seeded data is intended to look like a fridge used daily for months:
+
+- weekly milk purchases
+- eggs dropping below threshold and being restocked
+- vegetables bought in bursts
+- leftovers and expiry pressure
+- recurring recipes and meal logging
+- routine grocery orders and occasional misses
+
+You can reseed through the API too:
+
+```bash
+curl -X POST http://127.0.0.1:8000/seed/history \
+  -H "Content-Type: application/json" \
+  -d "{\"days\": 180, \"seed\": 4052}"
+```
+
+## Key API Checks
+
+Basic health and config:
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/config/status
+curl http://127.0.0.1:8000/memory
+```
+
+Inventory and batch visibility:
+
+```bash
+curl http://127.0.0.1:8000/inventory
+curl http://127.0.0.1:8000/inventory/batches
+curl -X POST http://127.0.0.1:8000/inventory/items \
+  -H "Content-Type: application/json" \
+  -d "{\"id\":\"milk_demo\",\"name\":\"Milk\",\"category\":\"dairy\",\"quantity\":1,\"unit\":\"carton\",\"expires_on\":\"2026-04-15T00:00:00+08:00\",\"purchased_at\":\"2026-04-11T18:00:00+08:00\"}"
+```
+
+Recipes and cooking:
+
+```bash
+curl http://127.0.0.1:8000/recipes
 curl http://127.0.0.1:8000/recipes/suggestions
 curl -X POST http://127.0.0.1:8000/recipes/online/search \
   -H "Content-Type: application/json" \
-  -d "{\"query\": \"high protein chicken dinner\", \"max_results\": 3}"
-curl http://127.0.0.1:8000/inventory
+  -d "{\"query\":\"high protein chicken dinner\",\"max_results\":3}"
+curl -X POST http://127.0.0.1:8000/recipes/chicken_rice_bowl/cook
+```
+
+Diagnostics and runtime:
+
+```bash
+curl http://127.0.0.1:8000/runtime/state
+curl http://127.0.0.1:8000/diagnostics
+curl http://127.0.0.1:8000/decision/state/demo-user
+curl -X POST http://127.0.0.1:8000/decision/run/demo-user
+curl -X POST http://127.0.0.1:8000/heartbeat/check
+curl http://127.0.0.1:8000/heartbeat/settings/demo-user
+```
+
+Heartbeat settings through HTTP:
+
+```bash
+curl -X POST http://127.0.0.1:8000/heartbeat/settings/demo-user \
+  -H "Content-Type: application/json" \
+  -d "{\"enabled\":true,\"interval_minutes\":60,\"dinner_time\":\"18:30\",\"chat_id\":\"demo-user\"}"
+
+curl -X POST "http://127.0.0.1:8000/heartbeat/check?user_id=demo-user"
+```
+
+User steering through HTTP:
+
+```bash
+curl http://127.0.0.1:8000/users/demo-user/preferences
+curl -X POST http://127.0.0.1:8000/users/demo-user/preferences \
+  -H "Content-Type: application/json" \
+  -d "{\"mode\":\"lazy\",\"max_prep_minutes\":7,\"notification_frequency\":\"quiet\",\"dietary_preferences\":[\"avoid dairy\"]}"
+
+curl http://127.0.0.1:8000/users/demo-user/state
+curl -X POST http://127.0.0.1:8000/users/demo-user/state \
+  -H "Content-Type: application/json" \
+  -d "{\"state\":\"tired\",\"duration_hours\":24,\"note\":\"long day\"}"
+
+curl -X POST http://127.0.0.1:8000/decision/feedback \
+  -H "Content-Type: application/json" \
+  -d "{\"user_id\":\"demo-user\",\"thread_key\":\"cook:veggie_omelette\",\"status\":\"ignored\",\"detail\":\"skip tonight\"}"
+```
+
+Grocery confirmation flow:
+
+```bash
 curl -X POST http://127.0.0.1:8000/groceries/order/recipe/chicken_rice_bowl
+curl -X POST http://127.0.0.1:8000/confirmations/<confirmation_id>/confirm
+curl -X POST http://127.0.0.1:8000/confirmations/<confirmation_id>/cancel
+```
+
+Telegram mock route:
+
+```bash
 curl -X POST http://127.0.0.1:8000/telegram/mock \
   -H "Content-Type: application/json" \
-  -d "{\"message\": \"what can I cook?\"}"
+  -d "{\"user_id\":\"demo-user\",\"message\":\"what can I cook tonight?\"}"
 ```
 
-## MCP Tools
+## Telegram Heartbeat Commands
 
-The prototype now exposes an MCP-style tool surface for recipe discovery and import:
+Per-user heartbeat settings are stored in SQL and default to hourly checks in `Asia/Singapore`.
 
-- `GET /mcp/tools`
-- `POST /mcp/call`
+Supported commands:
 
-Available tool names:
+- `/heartbeat`
+- `/heartbeat status`
+- `/heartbeat on`
+- `/heartbeat off`
+- `/heartbeat time 18:30`
+- `/heartbeat now`
 
-- `search_recipes_online`
-- `import_recipe`
-- `search_and_import_recipe`
+Examples:
 
-Online recipe discovery uses the OpenAI Responses API with the built-in `web_search` tool and requires a working `LLM_API_KEY`.
+```text
+/heartbeat status
+/heartbeat on
+/heartbeat time 18:30
+/heartbeat now
+```
 
-## Telegram Modes
+Heartbeat behavior:
 
-You can run Telegram in either mode:
+- checks run every hour in the background
+- the decision engine uses the user’s meal windows, mode, notification frequency, and temporary states
+- before dinner, FridgeMate can ask if the user is coming home to eat
+- if ingredients are available, it suggests one low-effort meal first instead of dumping options
+- if staples are low, it can draft pickup items like milk or eggs
+- repeated alerts are deduped until status materially changes
 
-- Webhook mode: used when `TELEGRAM_CHAT_ID` is set and requires a public HTTPS URL in `TELEGRAM_WEBHOOK_URL`
-- Polling mode: used when `TELEGRAM_CHAT_ID` is empty and does not require a domain or webhook
+Natural-language steering examples:
 
-Polling mode now runs through a background worker pool so one slow LLM call or one slow Telegram `sendMessage` does not stall the entire bot. The runner keeps polling, dispatches updates concurrently, and exposes `in_flight` worker counts in `GET /debug/integrations`.
+```text
+I'm exhausted today
+Not home tonight
+I'm commuting
+Give me easier meals this week
+I only want 5-minute meals
+Stop messaging me at night
+Switch to lazy mode
+Be quiet today
+```
 
-Polling mode command:
+Telegram callback actions:
+
+- `Cook this`
+- `Show easier option`
+- `Draft shopping list`
+- `Ignore tonight`
+- `Not home`
+- `Ordered food`
+
+Helper script:
 
 ```bash
-python scripts/poll_telegram.py
+python scripts/show_heartbeat_status.py demo-user
 ```
 
-If you run the FastAPI app with `uvicorn app.main:app --reload`, polling mode now starts automatically in the background when `TELEGRAM_CHAT_ID` is empty.
+## MCP Tool Surface
 
-Useful `.env` settings:
+Tool metadata is centralized and exposed at `GET /mcp/tools`. Each tool describes:
+
+- `policy`
+- `when_to_use`
+- `when_not_to_use`
+- `authoritative_source`
+
+Useful tool checks:
 
 ```bash
-TELEGRAM_WORKER_COUNT=4
-SESSION_TIMEOUT_MINUTES=30
-MEMORY_STORE_PATH=data/fridge_memory.json
-LOG_STORE_PATH=data/runtime_logs.json
+curl http://127.0.0.1:8000/mcp/tools
+curl -X POST http://127.0.0.1:8000/mcp/call \
+  -H "Content-Type: application/json" \
+  -d "{\"tool_name\":\"get_inventory_batches\",\"arguments\":{}}"
+curl -X POST http://127.0.0.1:8000/mcp/call \
+  -H "Content-Type: application/json" \
+  -d "{\"tool_name\":\"get_heartbeat_status\",\"arguments\":{\"user_id\":\"demo-user\"}}"
+curl -X POST http://127.0.0.1:8000/mcp/call \
+  -H "Content-Type: application/json" \
+  -d "{\"tool_name\":\"run_decision\",\"arguments\":{\"user_id\":\"demo-user\",\"force\":\"true\"}}"
 ```
 
-Session behavior:
+Protected actions return `requires_confirmation: true` first:
 
-- `/new` starts a new Telegram session immediately
-- after 30 minutes of inactivity, the next message automatically rolls into a new session
-- the previous session is compacted into a carryover summary so the fridge keeps relevant context without dragging the whole transcript forward
+- `clear_inventory`
+- `remove_inventory_item`
+- `order_groceries_for_recipe`
+- `order_staple_restock`
 
-Runtime logs:
+## Testing
 
-- integration and lifecycle events are written to `data/runtime_logs.json`
-- inspect them with `GET /debug/logs`
-- if you run `uvicorn app.main:app --reload`, source edits trigger an intentional shutdown/startup cycle; that is the reloader, not a crash
-
-Useful helper commands:
+Run the test suite:
 
 ```bash
-python scripts/check_telegram_webhook.py
-python scripts/register_telegram_webhook.py
+python -m unittest discover -s tests
 ```
 
-If you use polling mode, `TELEGRAM_BOT_TOKEN` is enough. You do not need `TELEGRAM_WEBHOOK_URL`.
+Useful targeted checks:
 
-## Example Interaction Flow
+```bash
+python -m unittest tests.test_mcp_tools
+python -m unittest tests.test_sql_storage
+python -m compileall app tests
+```
 
-`what can I cook?`
+What the tests cover:
 
-1. `BehaviourAgent` logs a recipe query
-2. `RecipeAgent` scores recipes against inventory coverage and soon-to-expire items
-3. The orchestrator returns top matches and missing ingredients if any
+- Alembic migration bootstrapping
+- SQL repository CRUD and snapshot persistence
+- six-month seed generation and reproducibility
+- diagnostics and runtime state checks
+- MCP tool coverage
+- destructive confirmation flow
+- Telegram `/heartbeat` command handling
+- natural-language steering into structured preference and state updates
+- callback-query feedback on proactive nudges
+- adaptive decision gating for lazy and silent modes
 
-`check inventory`
+## Notes
 
-1. `InventoryAgent` reads current stock
-2. Expiring and low-stock items are summarized
-3. Response is formatted for chat output
-
-`order groceries for chicken rice bowl`
-
-1. `RecipeAgent` identifies ingredient gaps
-2. `GroceryAgent` calls a mock grocery provider
-3. The order is stored in shared context and logged as an event
-
-## Bonus Logic
-
-- Rule-based behaviour learning from cooked meals and frequent commands
-- Predicted restock candidates based on favourite ingredients
-- Mock grocery ordering with order IDs and delivery ETA
+- SQLite is the default runtime store; the schema and repository layer are kept portable enough for Postgres later.
+- `MEMORY_STORE_PATH` is deprecated as the live operational store.
+- Online recipe discovery requires `LLM_API_KEY`.
+- Polling mode starts automatically when `TELEGRAM_CHAT_ID` is empty and `TELEGRAM_BOT_TOKEN` is set.

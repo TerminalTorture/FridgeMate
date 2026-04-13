@@ -1,0 +1,21 @@
+{
+  "read_only": [
+    "README.md",
+    "app/**",
+    "memory/**",
+    "data/runtime_logs.json"
+  ],
+  "read_write": [
+    "app/core/**",
+    "tests/**",
+    "data/fridge_memory.json",
+    "heartbeat.md",
+    "identity.md",
+    "soul.md",
+    "user.md"
+  ],
+  "terminal": {
+    "enabled": true,
+    "default_cwd": "."
+  }
+}

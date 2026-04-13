@@ -1,8 +1,25 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.models.domain import SharedContext
+
+
+def get_timezone(name: str = "UTC") -> timezone | ZoneInfo:
+    if name.upper() == "UTC":
+        return UTC
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        if name == "Asia/Singapore":
+            return timezone(timedelta(hours=8), name="Asia/Singapore")
+        return UTC
+
+
+def singapore_now() -> datetime:
+    tz = get_timezone("Asia/Singapore")
+    return datetime.now(tz)
 
 
 def utc_now() -> datetime:
@@ -18,6 +35,14 @@ def ensure_utc(value: datetime) -> datetime:
 def normalize_shared_context_datetimes(state: SharedContext) -> SharedContext:
     for meal in state.meal_history:
         meal.cooked_at = ensure_utc(meal.cooked_at)
+
+    for item in state.inventory:
+        if item.purchased_at is not None:
+            item.purchased_at = ensure_utc(item.purchased_at)
+
+    for batch in state.inventory_batches:
+        if batch.purchased_at is not None:
+            batch.purchased_at = ensure_utc(batch.purchased_at)
 
     for order in state.grocery_orders:
         order.created_at = ensure_utc(order.created_at)

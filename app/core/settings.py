@@ -34,9 +34,17 @@ class Settings:
     session_timeout_minutes: int
     memory_store_path: str
     log_store_path: str
+    database_url: str
+    sql_echo: bool
+    seed_history_on_startup: bool
+    seed_history_days: int
+    seed_history_seed: int
     llm_api_key: str | None
     llm_model: str
     llm_base_url: str | None
+    llm_gateway_policy_path: str
+    trace_mode: bool
+    trace_log_path: str
 
     @property
     def telegram_configured(self) -> bool:
@@ -54,6 +62,9 @@ class Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     _load_dotenv()
+    sql_echo = os.getenv("SQL_ECHO", "0").strip().lower() in {"1", "true", "yes", "on"}
+    seed_history_on_startup = os.getenv("SEED_HISTORY_ON_STARTUP", "1").strip().lower() in {"1", "true", "yes", "on"}
+    trace_mode = os.getenv("TRACE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
     return Settings(
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
@@ -65,7 +76,15 @@ def get_settings() -> Settings:
         session_timeout_minutes=int(os.getenv("SESSION_TIMEOUT_MINUTES", "30")),
         memory_store_path=os.getenv("MEMORY_STORE_PATH", "data/fridge_memory.json"),
         log_store_path=os.getenv("LOG_STORE_PATH", "data/runtime_logs.json"),
+        database_url=os.getenv("DATABASE_URL", "sqlite:///data/fridgemate.db"),
+        sql_echo=sql_echo,
+        seed_history_on_startup=seed_history_on_startup,
+        seed_history_days=int(os.getenv("SEED_HISTORY_DAYS", "180")),
+        seed_history_seed=int(os.getenv("SEED_HISTORY_SEED", "4052")),
         llm_api_key=os.getenv("LLM_API_KEY"),
         llm_model=os.getenv("LLM_MODEL", "gpt-5.1-mini"),
         llm_base_url=os.getenv("LLM_BASE_URL"),
+        llm_gateway_policy_path=os.getenv("LLM_GATEWAY_POLICY_PATH", "config/llm_gateway_policy.json"),
+        trace_mode=trace_mode,
+        trace_log_path=os.getenv("TRACE_LOG_PATH", "data/traces"),
     )

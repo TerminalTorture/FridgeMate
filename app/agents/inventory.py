@@ -24,6 +24,8 @@ class InventoryAgent:
                     existing.unit = item.unit
                     existing.category = item.category
                     existing.min_desired_quantity = item.min_desired_quantity
+                    if item.purchased_at is not None:
+                        existing.purchased_at = item.purchased_at
                     if item.expires_on is not None:
                         existing.expires_on = item.expires_on
                     return {

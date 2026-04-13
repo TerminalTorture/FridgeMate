@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ class InventoryItemInput(BaseModel):
     name: str
     quantity: float = Field(gt=0)
     unit: str = "unit"
+    purchased_at: datetime | None = None
     expires_on: date | None = None
     category: str = "general"
     min_desired_quantity: float = Field(default=1.0, ge=0)
@@ -57,6 +58,18 @@ class TelegramSendTestRequest(BaseModel):
     text: str = "MCP Fridge test message."
 
 
+class HeartbeatSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    dinner_time: str | None = None
+    chat_id: str | None = None
+
+
+class SeedHistoryRequest(BaseModel):
+    days: int = Field(default=180, ge=1, le=3650)
+    seed: int = 4052
+
+
 class RecipeIngredientInput(BaseModel):
     name: str
     quantity: float
@@ -73,6 +86,10 @@ class RecipeInput(BaseModel):
     tags: list[str] = Field(default_factory=list)
     calories: int = 0
     protein_g: int = 0
+    prep_minutes: int = Field(default=10, ge=1, le=240)
+    step_count: int = Field(default=3, ge=1, le=99)
+    effort_score: float = Field(default=0.4, ge=0.0, le=1.0)
+    suitable_when_tired: bool = True
     cuisine: str = "global"
     source_url: str | None = None
     source_title: str | None = None
@@ -88,6 +105,10 @@ class RecipeInput(BaseModel):
             tags=self.tags,
             calories=self.calories,
             protein_g=self.protein_g,
+            prep_minutes=self.prep_minutes,
+            step_count=self.step_count,
+            effort_score=self.effort_score,
+            suitable_when_tired=self.suitable_when_tired,
             cuisine=self.cuisine,
             source_url=self.source_url,
             source_title=self.source_title,
@@ -117,5 +138,35 @@ class RecipeSuggestion(BaseModel):
     missing_items: list[GroceryLine] = Field(default_factory=list)
     calories: int
     protein_g: int
+    prep_minutes: int
+    step_count: int
+    effort_score: float
+    suitable_when_tired: bool
     tags: list[str] = Field(default_factory=list)
     rationale: str
+
+
+class UserPreferencesRequest(BaseModel):
+    mode: str | None = None
+    meal_window_start: str | None = None
+    meal_window_end: str | None = None
+    late_night_window_start: str | None = None
+    late_night_window_end: str | None = None
+    max_prep_minutes: int | None = Field(default=None, ge=1, le=240)
+    notification_frequency: str | None = None
+    dietary_preferences: list[str] | None = None
+
+
+class TemporaryStateRequest(BaseModel):
+    state: str
+    duration_hours: int | None = Field(default=None, ge=1, le=168)
+    value: str = "active"
+    note: str = ""
+
+
+class DecisionFeedbackRequest(BaseModel):
+    user_id: str
+    intervention_id: str | None = None
+    thread_key: str | None = None
+    status: str
+    detail: str = ""

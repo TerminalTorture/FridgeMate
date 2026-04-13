@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel
 
 from app.core.context_store import ContextStore
-from app.core.http_client import post_json
+from app.core.http_client import post_json, stream_json_sse
 from app.core.integration_debug import IntegrationDebugLog
+from app.core.prompt_builder import PromptBuilder
 from app.core.settings import Settings, get_settings
 from app.core.system_prompt import SYSTEM_PROMPT
+from app.core.tracing import add_event, record_tools_exposed
 
 if TYPE_CHECKING:
     from app.core.mcp_tools import MCPToolService
@@ -19,15 +21,19 @@ class LLMService:
     def __init__(
         self,
         store: ContextStore,
+        prompt_builder: PromptBuilder | None = None,
         settings: Settings | None = None,
     ) -> None:
         self.store = store
+        self.prompt_builder = prompt_builder
         self.settings = settings or get_settings()
         self.debug_log = IntegrationDebugLog()
         self.mcp_tool_service: MCPToolService | None = None
 
     def bind_mcp_tool_service(self, mcp_tool_service: MCPToolService) -> None:
         self.mcp_tool_service = mcp_tool_service
+        if self.prompt_builder is not None:
+            self.prompt_builder.bind_mcp_tool_service(mcp_tool_service)
 
     def is_configured(self) -> bool:
         return bool(self.settings.llm_api_key)
@@ -41,32 +47,66 @@ class LLMService:
         if not self.is_configured():
             raise RuntimeError("LLM_API_KEY is not configured.")
 
-        user_input = {
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": self._build_prompt(
-                        user_id=user_id,
-                        user_message=user_message,
-                        conversation_context=conversation_context,
-                    ),
-                }
-            ],
-        }
-
-        payload: dict[str, object] = {
-            "model": self.settings.llm_model,
-            "instructions": SYSTEM_PROMPT,
-            "input": [user_input],
-        }
-        if self.mcp_tool_service is not None:
-            payload["tools"] = self.mcp_tool_service.responses_api_tools()
+        instructions, payload = self._build_response_payload(
+            user_id=user_id,
+            user_message=user_message,
+            conversation_context=conversation_context,
+        )
+        add_event(
+            name="llm_generate_reply",
+            detail={
+                "model": self.settings.llm_model,
+                "instructions_chars": len(instructions),
+                "input_chars": len(str(payload.get("input", []))),
+                "streaming": False,
+            },
+        )
 
         response_payload = self.create_response(payload)
         if self.mcp_tool_service is None:
             return self._extract_output_text(response_payload)
-        return self._complete_tool_loop(response_payload)
+        return self._complete_tool_loop(
+            response_payload,
+            instructions=instructions,
+        )
+
+    def generate_reply_streaming(
+        self,
+        user_id: str,
+        user_message: str,
+        conversation_context: str | None = None,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> str:
+        if not self.is_configured():
+            raise RuntimeError("LLM_API_KEY is not configured.")
+
+        instructions, payload = self._build_response_payload(
+            user_id=user_id,
+            user_message=user_message,
+            conversation_context=conversation_context,
+        )
+        add_event(
+            name="llm_generate_reply",
+            detail={
+                "model": self.settings.llm_model,
+                "instructions_chars": len(instructions),
+                "input_chars": len(str(payload.get("input", []))),
+                "streaming": True,
+            },
+        )
+
+        if on_progress is not None:
+            on_progress("Thinking...")
+
+        response_payload = self.create_response_streaming(payload, on_progress=on_progress)
+        if self.mcp_tool_service is None:
+            return self._extract_output_text(response_payload)
+        return self._complete_tool_loop(
+            response_payload,
+            instructions=instructions,
+            on_progress=on_progress,
+            stream_responses=True,
+        )
 
     def create_response(self, payload: dict[str, object]) -> dict[str, object]:
         if not self.is_configured():
@@ -99,7 +139,80 @@ class LLMService:
             )
             raise
 
-    def _complete_tool_loop(self, response_payload: dict[str, object], max_rounds: int = 6) -> str:
+    def create_response_streaming(
+        self,
+        payload: dict[str, object],
+        *,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> dict[str, object]:
+        if not self.is_configured():
+            raise RuntimeError("LLM_API_KEY is not configured.")
+
+        stream_payload = dict(payload)
+        stream_payload["stream"] = True
+        partial_text = ""
+        final_response: dict[str, object] | None = None
+
+        try:
+            for event in stream_json_sse(
+                url=self._responses_url(),
+                headers={
+                    "Authorization": f"Bearer {self.settings.llm_api_key}",
+                    "Content-Type": "application/json",
+                },
+                payload=stream_payload,
+            ):
+                event_type = str(event.get("type") or "")
+                if event_type == "response.output_text.delta":
+                    delta = event.get("delta")
+                    if isinstance(delta, str) and delta:
+                        partial_text += delta
+                        if on_progress is not None and partial_text.strip():
+                            on_progress(partial_text.strip())
+                response = event.get("response")
+                if isinstance(response, dict):
+                    final_response = response
+
+            self.debug_log.record(
+                service="llm",
+                direction="outbound",
+                status="success",
+                summary="Streaming Responses API call succeeded.",
+                metadata={"model": payload.get("model")},
+            )
+        except RuntimeError as exc:
+            self.debug_log.record(
+                service="llm",
+                direction="outbound",
+                status="fallback",
+                summary="Streaming Responses API call failed; retrying without streaming.",
+                metadata={"model": payload.get("model"), "error": str(exc)},
+            )
+            return self.create_response(payload)
+
+        if final_response is not None:
+            return final_response
+        if partial_text.strip():
+            return {
+                "output_text": partial_text.strip(),
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": partial_text.strip()}],
+                    }
+                ],
+            }
+        raise RuntimeError("Streaming LLM response did not contain a completed response.")
+
+    def _complete_tool_loop(
+        self,
+        response_payload: dict[str, object],
+        *,
+        instructions: str,
+        max_rounds: int = 6,
+        on_progress: Callable[[str], None] | None = None,
+        stream_responses: bool = False,
+    ) -> str:
         if self.mcp_tool_service is None:
             return self._extract_output_text(response_payload)
 
@@ -107,7 +220,12 @@ class LLMService:
         for _ in range(max_rounds):
             function_calls = self._extract_function_calls(current)
             if not function_calls:
+                if on_progress is not None:
+                    on_progress("Finalizing reply...")
                 return self._extract_output_text(current)
+
+            if on_progress is not None:
+                on_progress(self._tool_progress_message(function_calls))
 
             tool_outputs: list[dict[str, object]] = []
             for call in function_calls:
@@ -120,24 +238,82 @@ class LLMService:
                     }
                 )
 
-            current = self.create_response(
-                {
-                    "model": self.settings.llm_model,
-                    "instructions": SYSTEM_PROMPT,
-                    "previous_response_id": current.get("id"),
-                    "input": tool_outputs,
-                    "tools": self.mcp_tool_service.responses_api_tools(),
-                }
+            next_payload = {
+                "model": self.settings.llm_model,
+                "instructions": instructions,
+                "previous_response_id": current.get("id"),
+                "input": tool_outputs,
+                "tools": self.mcp_tool_service.responses_api_tools(),
+            }
+            if stream_responses:
+                current = self.create_response_streaming(next_payload, on_progress=on_progress)
+            else:
+                current = self.create_response(next_payload)
+            add_event(
+                name="llm_tool_round",
+                detail={
+                    "round_tool_calls": len(function_calls),
+                    "tool_outputs": len(tool_outputs),
+                },
             )
 
         raise RuntimeError("LLM tool loop exceeded the maximum number of rounds.")
+
+    def _build_response_payload(
+        self,
+        *,
+        user_id: str,
+        user_message: str,
+        conversation_context: str | None,
+    ) -> tuple[str, dict[str, object]]:
+        instructions = self._build_instructions(
+            user_id=user_id,
+            user_message=user_message,
+            conversation_context=conversation_context,
+        )
+        user_input = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": self._build_prompt(
+                        user_id=user_id,
+                        user_message=user_message,
+                    ),
+                }
+            ],
+        }
+        payload: dict[str, object] = {
+            "model": self.settings.llm_model,
+            "instructions": instructions,
+            "input": [user_input],
+        }
+        if self.mcp_tool_service is not None:
+            tools = self.mcp_tool_service.responses_api_tools()
+            payload["tools"] = tools
+            record_tools_exposed([str(tool.get("name") or "") for tool in tools])
+        return instructions, payload
+
+    @staticmethod
+    def _tool_progress_message(function_calls: list[dict[str, object]]) -> str:
+        if not function_calls:
+            return "Checking fridge data..."
+        if len(function_calls) == 1:
+            name = str(function_calls[0].get("name") or "tool")
+            return f"Checking fridge data with {name}..."
+        return "Checking fridge data..."
 
     def _build_prompt(
         self,
         user_id: str,
         user_message: str,
-        conversation_context: str | None = None,
     ) -> str:
+        if self.prompt_builder is not None:
+            return self.prompt_builder.build_user_input(
+                user_id=user_id,
+                user_message=user_message,
+            )
+
         snapshot = self.store.snapshot()
         inventory = ", ".join(
             f"{item.name} ({item.quantity:g} {item.unit})"
@@ -173,6 +349,21 @@ class LLMService:
             "\nIf the user asks to change fridge memory or status, use MCP tools to perform the update before replying."
             "\nRespond only as MCP Fridge."
         )
+
+    def _build_instructions(
+        self,
+        *,
+        user_id: str,
+        user_message: str,
+        conversation_context: str | None,
+    ) -> str:
+        if self.prompt_builder is not None:
+            return self.prompt_builder.build_instructions(
+                user_id=user_id,
+                user_message=user_message,
+                conversation_context=conversation_context,
+            )
+        return SYSTEM_PROMPT
 
     def _responses_url(self) -> str:
         base = self.settings.llm_base_url or "https://api.openai.com/v1"

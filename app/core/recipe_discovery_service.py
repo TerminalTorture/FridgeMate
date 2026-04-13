@@ -31,7 +31,9 @@ class RecipeDiscoveryService:
                                 "\"description\": \"...\", \"ingredients\": [{\"name\": \"...\", "
                                 "\"quantity\": 1, \"unit\": \"unit\", \"optional\": false}], "
                                 "\"instructions\": [\"...\"], \"tags\": [\"...\"], "
-                                "\"calories\": 0, \"protein_g\": 0, \"cuisine\": \"global\", "
+                                "\"calories\": 0, \"protein_g\": 0, \"prep_minutes\": 10, "
+                                "\"step_count\": 3, \"effort_score\": 0.4, \"suitable_when_tired\": true, "
+                                "\"cuisine\": \"global\", "
                                 "\"source_url\": \"https://...\", \"source_title\": \"...\"}]}. "
                                 "Use short practical instructions. If nutrition is unknown, use 0."
                             ),
@@ -85,6 +87,10 @@ class RecipeDiscoveryService:
                     ],
                     calories=int(item.get("calories") or 0),
                     protein_g=int(item.get("protein_g") or 0),
+                    prep_minutes=int(item.get("prep_minutes") or 10),
+                    step_count=int(item.get("step_count") or 3),
+                    effort_score=float(item.get("effort_score") or 0.4),
+                    suitable_when_tired=bool(item.get("suitable_when_tired", True)),
                     cuisine=str(item.get("cuisine") or "global"),
                     source_url=str(item.get("source_url")) if item.get("source_url") else None,
                     source_title=str(item.get("source_title")) if item.get("source_title") else None,
