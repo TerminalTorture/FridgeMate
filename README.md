@@ -2,6 +2,12 @@
 
 `FridgeMate` is a FastAPI-based household assistant with a SQL-first runtime store, batch-level fridge inventory, recipe matching, conversation memory, diagnostics, and a push-first decision engine for low-effort eating.
 
+## Platform Note
+
+This prototype is currently intended for Windows environments.
+
+Reason: the guarded terminal control path used by the gateway tools executes commands through PowerShell, so terminal tooling and safety checks are implemented around Windows PowerShell behavior.
+
 ## What Changed
 
 - Operational state now lives in SQLite by default through SQLAlchemy.

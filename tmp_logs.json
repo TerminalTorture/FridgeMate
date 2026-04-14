@@ -1,0 +1,77 @@
+[
+  {
+    "timestamp": "2026-04-13T05:43:16.289526+00:00",
+    "service": "telegram",
+    "direction": "internal",
+    "status": "fallback",
+    "summary": "Falling back to LLM reply generation.",
+    "metadata": {
+      "user_id": "u2"
+    }
+  },
+  {
+    "timestamp": "2026-04-13T05:43:16.766770+00:00",
+    "service": "telegram",
+    "direction": "internal",
+    "status": "fallback_error",
+    "summary": "LLM reply failed; using non-LLM fallback.",
+    "metadata": {
+      "user_id": "u2",
+      "error": "'output'"
+    }
+  },
+  {
+    "timestamp": "2026-04-13T05:44:05.138225+00:00",
+    "service": "mcp",
+    "direction": "internal",
+    "status": "success",
+    "summary": "MCP tool executed: clear_inventory.",
+    "metadata": {
+      "tool_name": "clear_inventory",
+      "requires_confirmation": true
+    }
+  },
+  {
+    "timestamp": "2026-04-13T05:44:07.538409+00:00",
+    "service": "mcp",
+    "direction": "internal",
+    "status": "success",
+    "summary": "MCP tool executed: confirm_pending_action.",
+    "metadata": {
+      "tool_name": "confirm_pending_action",
+      "requires_confirmation": false
+    }
+  },
+  {
+    "timestamp": "2026-04-13T05:45:01.064306+00:00",
+    "service": "telegram",
+    "direction": "internal",
+    "status": "fallback",
+    "summary": "Falling back to LLM reply generation.",
+    "metadata": {
+      "user_id": "u2"
+    }
+  },
+  {
+    "timestamp": "2026-04-13T05:45:02.806851+00:00",
+    "service": "mcp",
+    "direction": "internal",
+    "status": "success",
+    "summary": "MCP tool executed: clear_inventory.",
+    "metadata": {
+      "tool_name": "clear_inventory",
+      "requires_confirmation": true
+    }
+  },
+  {
+    "timestamp": "2026-04-13T05:45:04.749806+00:00",
+    "service": "mcp",
+    "direction": "internal",
+    "status": "success",
+    "summary": "MCP tool executed: confirm_pending_action.",
+    "metadata": {
+      "tool_name": "confirm_pending_action",
+      "requires_confirmation": false
+    }
+  }
+]
