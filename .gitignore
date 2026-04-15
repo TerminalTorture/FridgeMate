@@ -6,3 +6,7 @@ venv/
 *.db
 *.sqlite3
 data/*.db
+data/runtime_logs.json
+tmp_logs.json
+.logs/
+data/traces/
