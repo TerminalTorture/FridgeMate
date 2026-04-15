@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel
@@ -136,6 +138,38 @@ class LLMService:
                 status="error",
                 summary="Responses API call failed.",
                 metadata={"model": payload.get("model"), "error": str(exc)},
+            )
+            raise
+
+    def create_chat_completion(self, payload: dict[str, object]) -> dict[str, object]:
+        if not self.is_configured():
+            raise RuntimeError("LLM_API_KEY is not configured.")
+
+        metadata = self._chat_completion_log_metadata(payload)
+        try:
+            response = post_json(
+                url=self._chat_completions_url(),
+                headers={
+                    "Authorization": f"Bearer {self.settings.llm_api_key}",
+                    "Content-Type": "application/json",
+                },
+                payload=payload,
+            )
+            self.debug_log.record(
+                service="llm",
+                direction="outbound",
+                status="success",
+                summary="Chat Completions API call succeeded.",
+                metadata=metadata,
+            )
+            return response
+        except RuntimeError as exc:
+            self.debug_log.record(
+                service="llm",
+                direction="outbound",
+                status="error",
+                summary="Chat Completions API call failed.",
+                metadata={**metadata, "error": str(exc)},
             )
             raise
 
@@ -279,6 +313,7 @@ class LLMService:
                     "text": self._build_prompt(
                         user_id=user_id,
                         user_message=user_message,
+                        conversation_context=conversation_context,
                     ),
                 }
             ],
@@ -307,6 +342,7 @@ class LLMService:
         self,
         user_id: str,
         user_message: str,
+        conversation_context: str | None,
     ) -> str:
         if self.prompt_builder is not None:
             return self.prompt_builder.build_user_input(
@@ -357,17 +393,36 @@ class LLMService:
         user_message: str,
         conversation_context: str | None,
     ) -> str:
+        recipe_search_policy = self._recipe_search_policy_instruction(user_message)
         if self.prompt_builder is not None:
-            return self.prompt_builder.build_instructions(
+            instructions = self.prompt_builder.build_instructions(
                 user_id=user_id,
                 user_message=user_message,
                 conversation_context=conversation_context,
             )
+            if recipe_search_policy:
+                return f"{instructions}\n\n## Recipe Search Policy\n{recipe_search_policy}"
+            return instructions
+        if recipe_search_policy:
+            return f"{SYSTEM_PROMPT}\n\nRecipe search policy:\n{recipe_search_policy}"
         return SYSTEM_PROMPT
 
     def _responses_url(self) -> str:
         base = self.settings.llm_base_url or "https://api.openai.com/v1"
         return base.rstrip("/") + "/responses"
+
+    def _chat_completions_url(self) -> str:
+        base = self.settings.llm_base_url or "https://api.openai.com/v1"
+        return base.rstrip("/") + "/chat/completions"
+
+    def chat_completion_request_fingerprint(self, payload: dict[str, object]) -> str:
+        canonical_payload = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()[:12]
 
     def debug_snapshot(self) -> dict[str, object]:
         return {
@@ -376,6 +431,77 @@ class LLMService:
             "mcp_tools_bound": self.mcp_tool_service is not None,
             "recent_events": self.debug_log.dump(),
         }
+
+    @classmethod
+    def is_explicit_online_recipe_request(cls, user_message: str) -> bool:
+        lowered = user_message.strip().lower()
+        if not lowered:
+            return False
+        has_recipe_cue = bool(
+            re.search(r"\b(recipe|recipes|meal|dish|cook|dinner|lunch|breakfast)\b", lowered)
+        )
+        if not has_recipe_cue:
+            return False
+        explicit_cues = (
+            "search online",
+            "search the web",
+            "find online",
+            "on the web",
+            "from the web",
+            "online recipe",
+            "online recipes",
+            "new recipe",
+            "new recipes",
+            "something new",
+        )
+        return any(cue in lowered for cue in explicit_cues)
+
+    @classmethod
+    def _recipe_search_policy_instruction(cls, user_message: str) -> str:
+        if cls.is_explicit_online_recipe_request(user_message):
+            return (
+                "The user explicitly asked for an online or new recipe. "
+                "Use the MCP tool search_and_import_recipe first with selection_index=0 unless the user asked to review candidates. "
+                "Include user_id when calling recipe search tools so the user's search_model preference applies. "
+                "After tool execution, say the recipe was found online and include source_title or source_url when present. "
+                "Do not claim online search happened unless the tool result is present."
+            )
+        return (
+            "Do not use online recipe search for ordinary recipe suggestions. "
+            "Use local recipe and inventory tools first unless the user explicitly asks for an online or new recipe."
+        )
+
+    def _chat_completion_log_metadata(self, payload: dict[str, object]) -> dict[str, object]:
+        messages = payload.get("messages")
+        message_roles: list[str] = []
+        content_lengths: list[int] = []
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                message_roles.append(str(message.get("role") or "unknown"))
+                content_lengths.append(self._message_content_length(message.get("content")))
+        return {
+            "endpoint": self._chat_completions_url(),
+            "model": payload.get("model"),
+            "request_fingerprint": self.chat_completion_request_fingerprint(payload),
+            "message_count": len(messages) if isinstance(messages, list) else 0,
+            "message_roles": message_roles,
+            "content_lengths": content_lengths,
+            "has_web_search_options": isinstance(payload.get("web_search_options"), dict),
+        }
+
+    @staticmethod
+    def _message_content_length(content: object) -> int:
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total = 0
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    total += len(str(item["text"]))
+            return total
+        return 0
 
     @staticmethod
     def _extract_output_text(response_payload: dict[str, object]) -> str:

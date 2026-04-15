@@ -105,6 +105,11 @@ class PromptBuilder:
             "- When confidence is low, say why.\n"
             "- When multiple actions are possible, recommend the highest-value one.\n"
             "- When a tool returns requires_confirmation, explain the pending action and ask the user to confirm or cancel.\n"
+            "- For ordinary recipe suggestions, prefer local recipe and inventory tools.\n"
+            "- Use online recipe search only when the user explicitly asks for an online, web, or new recipe.\n"
+            "- For explicit online recipe requests, prefer search_and_import_recipe with selection_index 0 unless the user asks to review candidates first.\n"
+            "- When using recipe search tools, include user_id so the user's search_model preference applies.\n"
+            "- When an online recipe was imported, say it came from the web and cite source_title or source_url when available.\n"
         )
 
     def build_user_input(
@@ -114,6 +119,7 @@ class PromptBuilder:
         user_message: str,
     ) -> str:
         snapshot = self.store.snapshot()
+        preferences = self.store.user_preferences(user_id)
         inventory = ", ".join(
             f"{item.name} ({item.quantity:g} {item.unit})"
             for item in sorted(snapshot.inventory, key=lambda item: item.name.lower())[:12]
@@ -135,4 +141,5 @@ class PromptBuilder:
             f"- Low stock items: {low_stock}\n"
             f"- Water level: {snapshot.utilities.water_level_percent}%\n"
             f"- Ice level: {snapshot.utilities.ice_level_percent}%\n"
+            f"- Recipe search model: {preferences.search_model}\n"
         )

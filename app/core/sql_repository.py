@@ -12,6 +12,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
+from app.core.search_models import DEFAULT_SEARCH_MODEL, is_valid_search_model
 from app.core.sql_models import (
     AppStateRow,
     AssistantInterventionRow,
@@ -466,19 +467,14 @@ class SQLRepository:
             row = session.scalar(select(UserPreferenceRow).where(UserPreferenceRow.user_id == str(user_id)))
             if row is None:
                 return self._user_preference_defaults(user_id)
-            return UserPreferences(
-                user_id=row.user_id,
-                mode=row.mode,
-                meal_window_start=row.meal_window_start,
-                meal_window_end=row.meal_window_end,
-                late_night_window_start=row.late_night_window_start,
-                late_night_window_end=row.late_night_window_end,
-                max_prep_minutes=row.max_prep_minutes,
-                notification_frequency=row.notification_frequency,
-                dietary_preferences=list(row.dietary_preferences or []),
-            )
+            return self._user_preferences_row_to_domain(row)
 
     def set_user_preferences(self, user_id: str, **kwargs) -> UserPreferences:
+        if "search_model" in kwargs and kwargs["search_model"] is not None:
+            search_model = str(kwargs["search_model"]).strip()
+            if not is_valid_search_model(search_model):
+                raise ValueError("search_model is not supported.")
+            kwargs["search_model"] = search_model
         with self.session() as session:
             row = session.scalar(select(UserPreferenceRow).where(UserPreferenceRow.user_id == str(user_id)))
             if row is None:
@@ -493,6 +489,7 @@ class SQLRepository:
                     max_prep_minutes=defaults.max_prep_minutes,
                     notification_frequency=defaults.notification_frequency,
                     dietary_preferences=list(defaults.dietary_preferences),
+                    search_model=defaults.search_model,
                     updated_at=utc_now(),
                 )
             for field in (
@@ -504,13 +501,14 @@ class SQLRepository:
                 "max_prep_minutes",
                 "notification_frequency",
                 "dietary_preferences",
+                "search_model",
             ):
                 if field in kwargs and kwargs[field] is not None:
                     setattr(row, field, kwargs[field])
             row.updated_at = utc_now()
             session.add(row)
             session.flush()
-            return self.get_user_preferences(user_id)
+            return self._user_preferences_row_to_domain(row)
 
     def list_active_temporary_states(self, user_id: str) -> list[TemporaryStateOverride]:
         with self.session() as session:
@@ -595,16 +593,7 @@ class SQLRepository:
             row = session.scalar(select(DecisionProfileRow).where(DecisionProfileRow.user_id == str(user_id)))
             if row is None:
                 return self._decision_profile_defaults(user_id)
-            return DecisionProfile(
-                user_id=row.user_id,
-                ignore_nudge_rate=row.ignore_nudge_rate,
-                healthy_meal_acceptance_score=row.healthy_meal_acceptance_score,
-                quick_food_bias=row.quick_food_bias,
-                eat_at_home_likelihood=row.eat_at_home_likelihood,
-                stress_eating_signal=row.stress_eating_signal,
-                user_threshold=row.user_threshold,
-                updated_at=ensure_utc(row.updated_at),
-            )
+            return self._decision_profile_row_to_domain(row)
 
     def set_decision_profile(self, user_id: str, **kwargs) -> DecisionProfile:
         with self.session() as session:
@@ -634,7 +623,7 @@ class SQLRepository:
             row.updated_at = utc_now()
             session.add(row)
             session.flush()
-            return self.get_decision_profile(user_id)
+            return self._decision_profile_row_to_domain(row)
 
     def create_assistant_intervention(self, intervention: AssistantIntervention) -> AssistantIntervention:
         with self.session() as session:
@@ -1045,8 +1034,36 @@ class SQLRepository:
         return UserPreferences(user_id=str(user_id))
 
     @staticmethod
+    def _user_preferences_row_to_domain(row: UserPreferenceRow) -> UserPreferences:
+        return UserPreferences(
+            user_id=row.user_id,
+            mode=row.mode,
+            meal_window_start=row.meal_window_start,
+            meal_window_end=row.meal_window_end,
+            late_night_window_start=row.late_night_window_start,
+            late_night_window_end=row.late_night_window_end,
+            max_prep_minutes=row.max_prep_minutes,
+            notification_frequency=row.notification_frequency,
+            dietary_preferences=list(row.dietary_preferences or []),
+            search_model=row.search_model or DEFAULT_SEARCH_MODEL,
+        )
+
+    @staticmethod
     def _decision_profile_defaults(user_id: str) -> DecisionProfile:
         return DecisionProfile(user_id=str(user_id), updated_at=utc_now())
+
+    @staticmethod
+    def _decision_profile_row_to_domain(row: DecisionProfileRow) -> DecisionProfile:
+        return DecisionProfile(
+            user_id=row.user_id,
+            ignore_nudge_rate=row.ignore_nudge_rate,
+            healthy_meal_acceptance_score=row.healthy_meal_acceptance_score,
+            quick_food_bias=row.quick_food_bias,
+            eat_at_home_likelihood=row.eat_at_home_likelihood,
+            stress_eating_signal=row.stress_eating_signal,
+            user_threshold=row.user_threshold,
+            updated_at=ensure_utc(row.updated_at),
+        )
 
     @staticmethod
     def _intervention_row_to_domain(row: AssistantInterventionRow) -> AssistantIntervention:

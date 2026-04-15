@@ -5,6 +5,8 @@ from datetime import date, datetime
 from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from app.core.search_models import DEFAULT_SEARCH_MODEL
+
 
 class Base(DeclarativeBase):
     pass
@@ -274,6 +276,7 @@ class UserPreferenceRow(Base):
     max_prep_minutes: Mapped[int] = mapped_column(Integer, default=10)
     notification_frequency: Mapped[str] = mapped_column(String(20), default="normal")
     dietary_preferences: Mapped[list[str]] = mapped_column(JSON, default=list)
+    search_model: Mapped[str] = mapped_column(String(50), default=DEFAULT_SEARCH_MODEL)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 

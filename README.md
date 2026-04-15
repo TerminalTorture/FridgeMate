@@ -2,24 +2,7 @@
 
 `FridgeMate` is a FastAPI-based household assistant with a SQL-first runtime store, batch-level fridge inventory, recipe matching, conversation memory, diagnostics, and a push-first decision engine for low-effort eating.
 
-## Platform Note
 
-This prototype is currently intended for Windows environments.
-
-Reason: the guarded terminal control path used by the gateway tools executes commands through PowerShell, so terminal tooling and safety checks are implemented around Windows PowerShell behavior.
-
-## What Changed
-
-- Operational state now lives in SQLite by default through SQLAlchemy.
-- Alembic is included for schema setup and future migrations.
-- Inventory is modeled as canonical items plus physical batches with `purchased_at`, `expires_on`, `quantity`, `location`, and confidence.
-- Recipes, meal history, grocery orders, conversation sessions, heartbeat settings, diagnostics snapshots, and runtime events persist in SQL.
-- The assistant now separates user-editable preferences, temporary state overrides, and hidden learned decision signals.
-- Heartbeat now runs the adaptive decision engine instead of sending a generic dinner check every time.
-- Telegram supports lightweight natural-language steering such as `I'm exhausted today`, `I only want 5-minute meals`, and `stop messaging me at night`.
-- Proactive Telegram nudges now include inline actions such as `Cook this`, `Show easier option`, `Draft shopping list`, `Ignore tonight`, `Not home`, and `Ordered food`.
-- The app can seed roughly six months of daily household activity for realistic demos and testing.
-- Markdown files at the repo root still shape prompt behavior: `identity.md`, `soul.md`, `user.md`, `bootstrap.md`, `heartbeat.md`, and `memory/`.
 
 ## Persistence Model
 
@@ -59,6 +42,7 @@ python -m pip install -r requirements.txt
 ```
 
 2. Copy `.env.example` to `.env` and set your secrets.
+Minimumly, fill TELEGRAM_BOT_TOKEN,LLM_API_KEY,LLM_MODEL,LLM_BASE_URL
 
 3. Create the schema:
 

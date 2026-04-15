@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import re
 import subprocess
 from pathlib import Path, PurePosixPath
@@ -44,6 +46,8 @@ class LLMGatewayService:
         self._read_write_patterns: list[str] = []
         self._terminal_enabled = False
         self._terminal_default_cwd = "."
+        self._terminal_program = ""
+        self._terminal_args: list[str] = []
         self.reload_policy()
 
     def reload_policy(self) -> None:
@@ -74,6 +78,7 @@ class LLMGatewayService:
         self._read_write_patterns = [self._normalize_pattern(item) for item in read_write]
         self._terminal_enabled = bool((terminal or {}).get("enabled"))
         self._terminal_default_cwd = str((terminal or {}).get("default_cwd") or ".")
+        self._terminal_program, self._terminal_args = self._detect_terminal_runner()
 
     def is_configured(self) -> bool:
         return self._configured
@@ -86,7 +91,7 @@ class LLMGatewayService:
             f"Repo root: {self.repo_root}\n"
             f"Read-only paths: {', '.join(self._read_only_patterns) or 'none'}\n"
             f"Read-write paths: {', '.join(self._read_write_patterns) or 'none'}\n"
-            f"Terminal: {terminal_status}. Writes require read_write access."
+            f"Terminal: {terminal_status} via {self.terminal_shell_name}. Writes require read_write access."
         )
 
     def access_snapshot(self, path: str | None = None) -> dict[str, object]:
@@ -107,6 +112,7 @@ class LLMGatewayService:
             "terminal": {
                 "enabled": self._terminal_enabled,
                 "default_cwd": self._terminal_default_cwd,
+                "shell": self.terminal_shell_name,
             },
             "path": path,
             "resolved_path": resolved,
@@ -225,7 +231,7 @@ class LLMGatewayService:
 
         self._validate_terminal_command(command, mode=mode)
         completed = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
+            [self._terminal_program, *self._terminal_args, command],
             cwd=str(cwd_path),
             capture_output=True,
             text=True,
@@ -240,6 +246,10 @@ class LLMGatewayService:
             "stdout": completed.stdout,
             "stderr": completed.stderr,
         }
+
+    @property
+    def terminal_shell_name(self) -> str:
+        return Path(self._terminal_program).name if self._terminal_program else "unavailable"
 
     def resolve_path(self, path: str) -> Path:
         candidate = Path(path or ".")
@@ -323,6 +333,18 @@ class LLMGatewayService:
                 raise PermissionError("Command references an absolute path outside the repo root.") from exc
         if mode == "read_only" and any(token in lowered for token in self._WRITE_TOKENS):
             raise PermissionError("Write or destructive terminal commands are blocked in read_only mode.")
+
+    @staticmethod
+    def _detect_terminal_runner() -> tuple[str, list[str]]:
+        system = platform.system().lower()
+        if system == "windows":
+            return ("powershell", ["-NoProfile", "-Command"])
+
+        shell = os.getenv("SHELL", "").strip()
+        shell_name = Path(shell).name.lower() if shell else ""
+        if shell and shell_name in {"bash", "zsh", "sh", "ksh"}:
+            return (shell, ["-lc"])
+        return ("/bin/sh", ["-lc"])
 
     def _matches_any(self, relative_path: str, patterns: list[str], *, is_dir: bool) -> bool:
         relative = PurePosixPath(relative_path)

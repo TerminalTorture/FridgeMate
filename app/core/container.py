@@ -150,6 +150,9 @@ def build_container() -> AppContainer:
         conversation_manager=conversation_manager,
         heartbeat_service=heartbeat_service,
         decision_engine=decision_engine,
+        recipe_discovery_service=recipe_discovery_service,
+        confirmation_manager=confirmation_manager,
+        mcp_tool_service=mcp_tool_service,
         settings=settings,
     )
     heartbeat_service.set_notifier(telegram_service.send_message)

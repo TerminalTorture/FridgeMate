@@ -3,18 +3,32 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from app.core.container import build_container
 from app.core.llm_gateway import LLMGatewayService
+from app.core.recipe_discovery_service import RecipeDiscoveryService, RecipeSearchChatCompletionError
 from app.core.settings import get_settings
 from app.core.time_utils import utc_now
 from app.models.domain import AssistantIntervention, Recipe, RecipeIngredient
 
 
 class MCPToolSmokeTest(unittest.TestCase):
+    @staticmethod
+    def _read_only_terminal_command() -> str:
+        if platform.system().lower() == "windows":
+            return "Get-Location | Select-Object -ExpandProperty Path"
+        return "pwd"
+
+    @staticmethod
+    def _blocked_write_command() -> str:
+        if platform.system().lower() == "windows":
+            return "Set-Content README.md hacked"
+        return "touch README.md"
+
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.repo_root = Path(__file__).resolve().parents[1]
@@ -48,7 +62,7 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.container = build_container()
         self.discovery_calls = 0
 
-        def fake_search(query: str, max_results: int = 3) -> list[Recipe]:
+        def fake_search(query: str, max_results: int = 3, *, user_id: str | None = None) -> list[Recipe]:
             self.discovery_calls += 1
             return [
                 Recipe(
@@ -140,11 +154,11 @@ class MCPToolSmokeTest(unittest.TestCase):
             "fs_search_text": {"query": "HeartbeatService", "path": "app/core", "max_results": 5},
             "fs_write_text": {"path": "data/test_gateway/mcp_gateway_file.txt", "content": "hello"},
             "fs_append_text": {"path": "data/test_gateway/mcp_gateway_file.txt", "content": "\nworld"},
-            "terminal_exec": {"command": "Get-Location | Select-Object -ExpandProperty Path", "cwd": ".", "mode": "read_only"},
+            "terminal_exec": {"command": self._read_only_terminal_command(), "cwd": ".", "mode": "read_only"},
             "get_decision_state": {"user_id": "u1"},
             "run_decision": {"user_id": "u1", "force": "true"},
             "get_user_preferences": {"user_id": "u1"},
-            "set_user_preferences": {"user_id": "u1", "mode": "strict", "max_prep_minutes": 8, "notification_frequency": "active", "dietary_preferences": ["avoid dairy"]},
+            "set_user_preferences": {"user_id": "u1", "mode": "strict", "max_prep_minutes": 8, "notification_frequency": "active", "dietary_preferences": ["avoid dairy"], "search_model": "gpt-4o-mini-search-preview"},
             "get_user_state": {"user_id": "u1"},
             "set_user_state": {"user_id": "u1", "state": "tired", "duration_hours": 24, "value": "active", "note": "test"},
             "record_decision_feedback": {"user_id": "u1", "status": "ignored", "thread_key": "cook:test"},
@@ -268,6 +282,26 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertIn("Asia/Singapore", prompt)
         self.assertIn("get_inventory_batches", prompt)
 
+    def test_llm_instructions_prefer_online_recipe_import_for_explicit_request(self) -> None:
+        instructions = self.container.llm_service._build_instructions(
+            user_id="u1",
+            user_message="search online for a pasta recipe",
+            conversation_context="Recent conversation context.",
+        )
+
+        self.assertIn("search_and_import_recipe", instructions)
+        self.assertIn("selection_index=0", instructions)
+        self.assertIn("came from the web", instructions)
+
+    def test_llm_instructions_keep_local_recipes_first_for_normal_request(self) -> None:
+        instructions = self.container.llm_service._build_instructions(
+            user_id="u1",
+            user_message="what can I cook tonight?",
+            conversation_context="Recent conversation context.",
+        )
+
+        self.assertIn("Do not use online recipe search for ordinary recipe suggestions", instructions)
+
     def test_gateway_service_reports_missing_policy(self) -> None:
         service = LLMGatewayService(
             repo_root=self.repo_root,
@@ -311,7 +345,7 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         terminal_result = self.container.mcp_tool_service.call_tool(
             "terminal_exec",
-            {"command": "Get-Location | Select-Object -ExpandProperty Path", "cwd": ".", "mode": "read_only"},
+            {"command": self._read_only_terminal_command(), "cwd": ".", "mode": "read_only"},
         )
         self.assertEqual(terminal_result["tool_name"], "terminal_exec")
         self.assertEqual(terminal_result["returncode"], 0)
@@ -319,7 +353,7 @@ class MCPToolSmokeTest(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.container.mcp_tool_service.call_tool(
                 "terminal_exec",
-                {"command": "Set-Content README.md hacked", "cwd": ".", "mode": "read_only"},
+                {"command": self._blocked_write_command(), "cwd": ".", "mode": "read_only"},
             )
 
     def test_diagnostics_reports_degraded_components(self) -> None:
@@ -357,6 +391,96 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertIn("every 5 minutes", interval_reply)
         self.assertTrue(len(now_reply) > 0)
 
+    def test_telegram_searchmodel_commands(self) -> None:
+        status_reply = self.container.telegram_service.build_reply_for_user("u-search", "/searchmodel", chat_id="chat-search")
+        set_reply = self.container.telegram_service.build_reply_for_user(
+            "u-search",
+            "/searchmodel gpt-4o-search-preview",
+            chat_id="chat-search",
+        )
+        invalid_reply = self.container.telegram_service.build_reply_for_user(
+            "u-search",
+            "/searchmodel invalid-model",
+            chat_id="chat-search",
+        )
+
+        self.assertIn("Current recipe search model", status_reply)
+        self.assertIn("Recipe search model set to gpt-4o-search-preview", set_reply)
+        self.assertIn("Unsupported recipe search model", invalid_reply)
+        self.assertEqual(
+            self.container.store.user_preferences("u-search").search_model,
+            "gpt-4o-search-preview",
+        )
+
+    def test_telegram_online_recipe_search_yes_imports_and_recipes_lists_catalog(self) -> None:
+        search_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-import",
+            "search for nasi lemak recipe",
+            chat_id="chat-online-import",
+        )
+        before_import_names = {recipe.name for recipe in self.container.recipe_agent.list_recipes()}
+
+        self.assertIn("reply yes to import", search_reply.lower())
+        self.assertNotIn("Test Online Recipe", before_import_names)
+
+        confirm_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-import",
+            "Yes",
+            chat_id="chat-online-import",
+        )
+        recipes_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-import",
+            "/recipes",
+            chat_id="chat-online-import",
+        )
+        suggestions_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-import",
+            "/suggestions",
+            chat_id="chat-online-import",
+        )
+
+        self.assertIn("Imported Test Online Recipe", confirm_reply)
+        self.assertIn("Saved recipes:", recipes_reply)
+        self.assertIn("Test Online Recipe", recipes_reply)
+        self.assertIn("Top recipe ideas right now", suggestions_reply)
+
+    def test_telegram_online_recipe_search_no_cancels_import(self) -> None:
+        search_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-cancel",
+            "search for nasi lemak recipe",
+            chat_id="chat-online-cancel",
+        )
+
+        self.assertIn("reply yes to import", search_reply.lower())
+
+        cancel_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-cancel",
+            "No",
+            chat_id="chat-online-cancel",
+        )
+        recipes_reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-cancel",
+            "/recipes",
+            chat_id="chat-online-cancel",
+        )
+
+        self.assertIn("did not import", cancel_reply.lower())
+        self.assertNotIn("Test Online Recipe", recipes_reply)
+
+    def test_mcp_tool_can_set_search_model(self) -> None:
+        result = self.container.mcp_tool_service.call_tool(
+            "set_user_preferences",
+            {"user_id": "u-search-mcp", "search_model": "gpt-5-search-api"},
+        )
+
+        self.assertEqual(result["tool_name"], "set_user_preferences")
+        self.assertEqual(result["search_model"], "gpt-5-search-api")
+        status = self.container.mcp_tool_service.call_tool(
+            "get_user_preferences",
+            {"user_id": "u-search-mcp"},
+        )
+        self.assertEqual(status["search_model"], "gpt-5-search-api")
+
     def test_mcp_tool_can_set_heartbeat_interval(self) -> None:
         result = self.container.mcp_tool_service.call_tool(
             "set_heartbeat_interval",
@@ -382,6 +506,64 @@ class MCPToolSmokeTest(unittest.TestCase):
         states = self.container.store.temporary_states("u-override")
         self.assertIn("tired", {state.state for state in states})
         self.assertIn("treat you as tired", reply.lower())
+
+    def test_online_recipe_request_fallback_is_honest(self) -> None:
+        def fail_search(*args, **kwargs):
+            raise RuntimeError("unauthorized")
+
+        self.container.recipe_discovery_service.search_online_recipes = fail_search
+
+        reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-fallback",
+            "find a new chicken recipe on the web",
+            chat_id="chat-online-fallback",
+        )
+
+        self.assertIn("couldn’t search online recipes right now", reply.lower())
+        self.assertIn("have not imported anything from the web", reply.lower())
+
+    def test_online_recipe_fallback_log_includes_request_fingerprint(self) -> None:
+        def fail_search(*args, **kwargs):
+            raise RecipeSearchChatCompletionError(
+                "Online recipe search failed: HTTP request failed with status 400",
+                request_fingerprint="abc123retry",
+                original_error=RuntimeError("HTTP request failed with status 400"),
+            )
+
+        self.container.recipe_discovery_service.search_online_recipes = fail_search
+
+        self.container.telegram_service.build_reply_for_user(
+            "u-online-fingerprint",
+            "find a new nasi lemak recipe on the web",
+            chat_id="chat-online-fingerprint",
+        )
+
+        recent_events = self.container.telegram_service.debug_snapshot()["recent_events"]
+        fallback_event = next(
+            event for event in recent_events if event["status"] == "fallback_error"
+        )
+        self.assertEqual(
+            fallback_event["metadata"].get("request_fingerprint"),
+            "abc123retry",
+        )
+
+    def test_online_recipe_fallback_mentions_malformed_recipe_response(self) -> None:
+        def fail_search(*args, **kwargs):
+            raise RecipeSearchChatCompletionError(
+                "Online recipe search returned invalid JSON: Unterminated string starting at: line 1 column 10",
+                request_fingerprint="jsonbad123",
+                original_error=ValueError("bad json"),
+            )
+
+        self.container.recipe_discovery_service.search_online_recipes = fail_search
+
+        reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-malformed",
+            "find a new nasi lemak recipe on the web",
+            chat_id="chat-online-malformed",
+        )
+
+        self.assertIn("recipe search response was malformed", reply.lower())
 
     def test_silent_mode_suppresses_non_urgent_decision(self) -> None:
         def mutator(state):
@@ -561,6 +743,192 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertIn("Hello", progress_updates)
         self.assertIn("Hello there", progress_updates)
 
+    def test_recipe_discovery_service_parses_web_search_sources(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+        self.container.store.set_user_preferences("u-search-model", search_model="gpt-5-search-api")
+
+        def fake_create_chat_completion(payload: dict[str, object]) -> dict[str, object]:
+            self.assertEqual(payload["model"], "gpt-5-search-api")
+            self.assertEqual(payload["web_search_options"], {})
+            self.assertEqual(payload["response_format"]["type"], "json_schema")
+            self.assertEqual(payload["response_format"]["json_schema"]["name"], "recipe_search_results")
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "recipes": [
+                                        {
+                                            "id": "web-pasta",
+                                            "name": "Web Pasta",
+                                            "description": "Found online.",
+                                            "ingredients": [{"name": "Pasta", "quantity": 1, "unit": "box"}],
+                                            "instructions": ["Boil pasta.", "Serve."],
+                                            "tags": ["italian"],
+                                            "calories": 520,
+                                            "protein_g": 18,
+                                            "prep_minutes": 15,
+                                            "step_count": 2,
+                                            "effort_score": 0.3,
+                                            "suitable_when_tired": True,
+                                            "cuisine": "italian",
+                                            "source_url": " https://example.com/web-pasta ",
+                                            "source_title": " Example Pasta ",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+        self.container.llm_service.create_chat_completion = fake_create_chat_completion
+        recipes = service.search_online_recipes("pasta", max_results=1, user_id="u-search-model")
+
+        self.assertEqual(len(recipes), 1)
+        self.assertEqual(recipes[0].name, "Web Pasta")
+        self.assertEqual(recipes[0].source_url, "https://example.com/web-pasta")
+        self.assertEqual(recipes[0].source_title, "Example Pasta")
+        self.assertEqual(recipes[0].cuisine, "italian")
+
+    def test_recipe_discovery_payload_validator_accepts_documented_shape(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+        payload = service._build_chat_completion_payload(
+            query="nasi lemak",
+            max_results=2,
+            search_model="gpt-4o-mini-search-preview",
+        )
+
+        service._validate_chat_completion_payload(payload)
+        self.assertEqual(payload["response_format"]["type"], "json_schema")
+
+    def test_recipe_discovery_payload_validator_rejects_malformed_messages(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+        payload = {
+            "model": "gpt-4o-mini-search-preview",
+            "web_search_options": {},
+            "response_format": {"type": "json_schema"},
+            "messages": [{"role": "user", "content": 123}],
+        }
+
+        with self.assertRaises(ValueError):
+            service._validate_chat_completion_payload(payload)
+
+    def test_recipe_discovery_retries_chat_completion_once_before_success(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+        attempts = 0
+
+        def flaky_create_chat_completion(payload: dict[str, object]) -> dict[str, object]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError(
+                    "HTTP request failed with status 400: We could not parse the JSON body of your request."
+                )
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "recipes": [
+                                        {
+                                            "id": "retry-pasta",
+                                            "name": "Retry Pasta",
+                                            "ingredients": [{"name": "Pasta", "quantity": 1, "unit": "box"}],
+                                            "instructions": ["Boil pasta."],
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+        self.container.llm_service.create_chat_completion = flaky_create_chat_completion
+        recipes = service.search_online_recipes("pasta", max_results=1, user_id="u-retry")
+
+        self.assertEqual(attempts, 2)
+        self.assertEqual(recipes[0].name, "Retry Pasta")
+
+    def test_recipe_discovery_repeated_failure_retries_once_then_raises_with_fingerprint(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+        attempts = 0
+
+        def fail_create_chat_completion(payload: dict[str, object]) -> dict[str, object]:
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError(
+                "HTTP request failed with status 400: We could not parse the JSON body of your request."
+            )
+
+        self.container.llm_service.create_chat_completion = fail_create_chat_completion
+
+        with self.assertRaises(RecipeSearchChatCompletionError) as context:
+            service.search_online_recipes("pasta", max_results=1, user_id="u-retry-fail")
+
+        self.assertEqual(attempts, 2)
+        self.assertTrue(bool(context.exception.request_fingerprint))
+        self.assertIn("Online recipe search failed", str(context.exception))
+
+    def test_recipe_discovery_service_raises_on_invalid_json(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+
+        def fake_create_chat_completion(payload: dict[str, object]) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "not valid json"}}]}
+
+        self.container.llm_service.create_chat_completion = fake_create_chat_completion
+
+        with self.assertRaises(RecipeSearchChatCompletionError) as context:
+            service.search_online_recipes("pasta", max_results=1)
+        self.assertIn("invalid JSON", str(context.exception))
+        recent_events = self.container.llm_service.debug_snapshot()["recent_events"]
+        parse_event = next(
+            entry for entry in recent_events if entry["summary"] == "Recipe search response JSON parse failed."
+        )
+        self.assertEqual(
+            parse_event["metadata"].get("request_fingerprint"),
+            context.exception.request_fingerprint,
+        )
+        self.assertIn("not valid json", parse_event["metadata"].get("response_preview_head", ""))
+
+    def test_chat_completion_logging_records_redacted_request_metadata(self) -> None:
+        import app.core.llm_service as llm_service_module
+
+        original_post_json = llm_service_module.post_json
+
+        def fake_post_json(url: str, headers: dict[str, str], payload: dict[str, object], timeout: int = 30, disable_proxies: bool = True) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+        llm_service_module.post_json = fake_post_json
+        try:
+            payload = {
+                "model": "gpt-4o-mini-search-preview",
+                "web_search_options": {},
+                "messages": [
+                    {"role": "system", "content": "Return JSON only."},
+                    {"role": "user", "content": "Find nasi lemak recipes online."},
+                ],
+            }
+            self.container.llm_service.create_chat_completion(payload)
+        finally:
+            llm_service_module.post_json = original_post_json
+
+        recent_events = self.container.llm_service.debug_snapshot()["recent_events"]
+        event = next(
+            entry for entry in recent_events if entry["summary"] == "Chat Completions API call succeeded."
+        )
+        metadata = event["metadata"]
+        self.assertEqual(metadata["model"], "gpt-4o-mini-search-preview")
+        self.assertTrue(bool(metadata.get("request_fingerprint")))
+        self.assertEqual(metadata["message_roles"], ["system", "user"])
+        self.assertEqual(metadata["content_lengths"], [17, 31])
+        self.assertTrue(metadata["has_web_search_options"])
+        self.assertNotIn("nasi lemak", json.dumps(metadata).lower())
+
     def test_telegram_draft_success_then_final_send(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 
@@ -592,6 +960,62 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertEqual(calls[0][0], "sendMessageDraft")
         self.assertEqual(calls[-1][0], "sendMessage")
         self.assertTrue(self.container.telegram_service._draft_streaming_supported)
+
+    def test_set_my_commands_registers_full_command_list(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def fake_telegram_api_call_async(method_name: str, payload: dict[str, object]) -> dict[str, object]:
+            calls.append((method_name, payload))
+            return {"ok": True, "method": method_name}
+
+        self.container.telegram_service._telegram_api_call_async = fake_telegram_api_call_async
+        self.container.telegram_service.settings = self.container.telegram_service.settings.__class__(
+            **{
+                **self.container.telegram_service.settings.__dict__,
+                "telegram_bot_token": "test-token",
+            }
+        )
+
+        result = self.container.telegram_service.set_my_commands()
+
+        self.assertEqual(result["method"], "setMyCommands")
+        self.assertEqual(calls[0][0], "setMyCommands")
+        commands = calls[0][1]["commands"]
+        command_names = [item["command"] for item in commands]
+        self.assertIn("recipes", command_names)
+        self.assertIn("suggestions", command_names)
+        self.assertIn("inventory", command_names)
+        self.assertIn("groceries", command_names)
+        self.assertIn("cook", command_names)
+        self.assertIn("utilities", command_names)
+        self.assertIn("heartbeat", command_names)
+        self.assertIn("searchmodel", command_names)
+        self.assertIn("new", command_names)
+
+    def test_register_webhook_also_sets_my_commands(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def fake_telegram_api_call_async(method_name: str, payload: dict[str, object]) -> dict[str, object]:
+            calls.append((method_name, payload))
+            return {"ok": True, "method": method_name}
+
+        self.container.telegram_service._telegram_api_call_async = fake_telegram_api_call_async
+        self.container.telegram_service.settings = self.container.telegram_service.settings.__class__(
+            **{
+                **self.container.telegram_service.settings.__dict__,
+                "telegram_bot_token": "test-token",
+                "telegram_webhook_url": "https://example.com/telegram/webhook",
+            }
+        )
+
+        result = self.container.telegram_service.register_webhook(
+            url="https://example.com/telegram/webhook",
+            drop_pending_updates=True,
+        )
+
+        self.assertEqual(result["method"], "setWebhook")
+        self.assertEqual(calls[0][0], "setWebhook")
+        self.assertEqual(calls[1][0], "setMyCommands")
 
     def test_send_message_splits_long_final_reply(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []

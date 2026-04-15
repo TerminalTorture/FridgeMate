@@ -4,6 +4,7 @@ import json
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -153,7 +154,7 @@ def debug_logs(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, objec
 
 
 @app.on_event("startup")
-def startup_event() -> None:
+async def startup_event() -> None:
     append_json_log(
         {
             "timestamp": utc_now().isoformat(),
@@ -169,7 +170,10 @@ def startup_event() -> None:
         }
     )
     if settings.telegram_configured and settings.telegram_mode == "polling":
+        await container.telegram_service.set_my_commands_async()
         container.telegram_runner.start()
+    elif settings.telegram_configured:
+        await container.telegram_service.set_my_commands_async()
     container.heartbeat_service.start()
 
 
@@ -270,6 +274,7 @@ def set_user_preferences(user_id: str, payload: UserPreferencesRequest):
         max_prep_minutes=payload.max_prep_minutes,
         notification_frequency=payload.notification_frequency,
         dietary_preferences=payload.dietary_preferences,
+        search_model=payload.search_model,
     )
 
 
@@ -617,13 +622,13 @@ def mcp_rpc(payload: dict[str, object]):
     if method == "tools/list":
         tools = [
             {
-                "name": tool["name"],
-                "description": tool["description"],
+                "name": str(tool.get("name") or ""),
+                "description": str(tool.get("description") or ""),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         key: {"type": value}
-                        for key, value in tool["arguments"].items()
+                        for key, value in cast(dict[str, str], tool.get("arguments") or {}).items()
                     },
                 },
             }

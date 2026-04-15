@@ -5,6 +5,7 @@ from concurrent.futures import Future
 from itertools import count
 from typing import Awaitable, Callable
 
+from app.core.confirmation_manager import ConfirmationManager
 from app.core.conversation_manager import ConversationManager
 from app.core.decision_engine import DecisionEngine
 from app.core.heartbeat_service import HeartbeatService
@@ -12,13 +13,29 @@ from app.core.http_client import post_json
 from app.core.integration_debug import IntegrationDebugLog
 from app.core.llm_service import LLMService
 from app.core.orchestrator import MCPFridgeOrchestrator
+from app.core.recipe_discovery_service import RecipeDiscoveryService, RecipeSearchChatCompletionError
+from app.core.search_models import ALLOWED_SEARCH_MODELS, DEFAULT_SEARCH_MODEL, is_valid_search_model
 from app.core.settings import Settings, get_settings
 from app.core.tracing import add_event, trace_scope, update_trace_metadata
+from app.models.api import RecipeInput
 
 
 class TelegramService:
     _TELEGRAM_MESSAGE_LIMIT = 4000
     _TELEGRAM_DRAFT_LIMIT = 4096
+    _BOT_COMMANDS = [
+        {"command": "start", "description": "Show the FridgeMate command list"},
+        {"command": "help", "description": "Show the FridgeMate command list"},
+        {"command": "recipes", "description": "Show saved recipes in the catalog"},
+        {"command": "suggestions", "description": "Suggest recipes from current inventory"},
+        {"command": "inventory", "description": "Show current fridge inventory"},
+        {"command": "groceries", "description": "Draft groceries or order by recipe"},
+        {"command": "cook", "description": "Cook a recipe and update inventory"},
+        {"command": "utilities", "description": "Show water and ice levels"},
+        {"command": "heartbeat", "description": "View or change heartbeat settings"},
+        {"command": "searchmodel", "description": "View or change the recipe search model"},
+        {"command": "new", "description": "Start a new fridge conversation session"},
+    ]
 
     def __init__(
         self,
@@ -27,6 +44,9 @@ class TelegramService:
         conversation_manager: ConversationManager,
         heartbeat_service: HeartbeatService,
         decision_engine: DecisionEngine,
+        recipe_discovery_service: RecipeDiscoveryService,
+        confirmation_manager: ConfirmationManager,
+        mcp_tool_service,
         settings: Settings | None = None,
     ) -> None:
         self.orchestrator = orchestrator
@@ -34,6 +54,9 @@ class TelegramService:
         self.conversation_manager = conversation_manager
         self.heartbeat_service = heartbeat_service
         self.decision_engine = decision_engine
+        self.recipe_discovery_service = recipe_discovery_service
+        self.confirmation_manager = confirmation_manager
+        self.mcp_tool_service = mcp_tool_service
         self.settings = settings or get_settings()
         self.debug_log = IntegrationDebugLog()
         self._draft_id_counter = count(1)
@@ -162,7 +185,9 @@ class TelegramService:
         if self.settings.telegram_webhook_secret:
             payload["secret_token"] = self.settings.telegram_webhook_secret
 
-        return await self._telegram_api_call_async("setWebhook", payload)
+        result = await self._telegram_api_call_async("setWebhook", payload)
+        await self.set_my_commands_async()
+        return result
 
     def get_webhook_info(self) -> dict[str, object]:
         return asyncio.run(self.get_webhook_info_async())
@@ -180,6 +205,15 @@ class TelegramService:
             "deleteWebhook",
             {"drop_pending_updates": drop_pending_updates},
         )
+
+    def set_my_commands(self) -> dict[str, object]:
+        return asyncio.run(self.set_my_commands_async())
+
+    async def set_my_commands_async(self) -> dict[str, object]:
+        if not self.settings.telegram_bot_token:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+        payload: dict[str, object] = {"commands": list(self._BOT_COMMANDS)}
+        return await self._telegram_api_call_async("setMyCommands", payload)
 
     def send_message(
         self,
@@ -326,11 +360,13 @@ class TelegramService:
             reply = (
                 "MCP Fridge commands:\n"
                 "/recipes\n"
+                "/suggestions\n"
                 "/inventory\n"
                 "/groceries [recipe name]\n"
                 "/cook <recipe name>\n"
                 "/utilities\n"
                 "/heartbeat [status|on|off|time HH:MM|every MINUTES|interval MINUTES|now]\n"
+                "/searchmodel [gpt-5-search-api|gpt-4o-search-preview|gpt-4o-mini-search-preview]\n"
                 "/new"
             )
             self.conversation_manager.register_user_turn(user_id, text)
@@ -343,7 +379,32 @@ class TelegramService:
             self.conversation_manager.register_assistant_turn(user_id, reply)
             return reply
 
+        if translated.startswith("__searchmodel__"):
+            self.conversation_manager.register_user_turn(user_id, text)
+            reply = self._handle_search_model_command(user_id=user_id, command=translated)
+            self.conversation_manager.register_assistant_turn(user_id, reply)
+            return reply
+
         self.conversation_manager.register_user_turn(user_id, text)
+
+        pending_reply = await self._resolve_pending_confirmation_async(user_id=user_id, text=text)
+        if pending_reply is not None:
+            self.conversation_manager.register_assistant_turn(user_id, pending_reply)
+            return pending_reply
+
+        if translated == "__recipes_catalog__":
+            reply = self._format_recipe_catalog_reply()
+            self.conversation_manager.register_assistant_turn(user_id, reply)
+            return reply
+
+        if self.llm_service.is_explicit_online_recipe_request(text):
+            reply = await self._handle_online_recipe_search_async(
+                user_id=user_id,
+                text=text,
+                draft_callback=draft_callback,
+            )
+            self.conversation_manager.register_assistant_turn(user_id, reply)
+            return reply
 
         override_result = self.decision_engine.apply_override_text(user_id, text)
         if override_result is not None:
@@ -457,6 +518,8 @@ class TelegramService:
         if lowered.startswith("/new"):
             return "__new_session__"
         if lowered.startswith("/recipes"):
+            return "__recipes_catalog__"
+        if lowered.startswith("/suggestions"):
             return "what can i cook?"
         if lowered.startswith("/inventory"):
             return "check inventory"
@@ -471,10 +534,208 @@ class TelegramService:
             )
         if lowered.startswith("/heartbeat"):
             return "__heartbeat__ " + stripped[len("/heartbeat"):].strip()
+        if lowered.startswith("/searchmodel"):
+            return "__searchmodel__ " + stripped[len("/searchmodel"):].strip()
         if lowered.startswith("/cook"):
             parts = stripped.split(maxsplit=1)
             return stripped if len(parts) > 1 else "cook "
         return stripped
+
+    def _format_recipe_catalog_reply(self) -> str:
+        recipes = self.orchestrator.recipe_agent.list_recipes()
+        self.debug_log.record(
+            service="telegram",
+            direction="internal",
+            status="success",
+            summary="Built Telegram recipe catalog reply.",
+            metadata={"recipe_count": len(recipes)},
+        )
+        if not recipes:
+            return "No saved recipes yet."
+
+        lines = ["Saved recipes:"]
+        for recipe in recipes:
+            source = recipe.source_title or recipe.source_url
+            if source:
+                lines.append(f"- {recipe.name} ({source})")
+            else:
+                lines.append(f"- {recipe.name}")
+        return "\n".join(lines)
+
+    async def _handle_online_recipe_search_async(
+        self,
+        *,
+        user_id: str,
+        text: str,
+        draft_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
+        if not self.llm_service.is_configured():
+            return (
+                "I couldn’t search online recipes right now because the LLM API key is not configured. "
+                "I have not imported anything from the web."
+            )
+
+        if draft_callback is not None:
+            await draft_callback("Searching online recipes...")
+
+        try:
+            recipes = await asyncio.to_thread(
+                self.recipe_discovery_service.search_online_recipes,
+                text,
+                3,
+                user_id=user_id,
+            )
+        except RecipeSearchChatCompletionError as exc:
+            return self._online_recipe_failure_reply(exc)
+        except Exception as exc:
+            return self._online_recipe_failure_reply(exc)
+
+        if not recipes:
+            return "I couldn’t find any online recipes to import for that request."
+
+        selected = recipes[0]
+        recipe_payload = RecipeInput(
+            id=selected.id,
+            name=selected.name,
+            description=selected.description,
+            ingredients=selected.ingredients,
+            instructions=selected.instructions,
+            tags=selected.tags,
+            calories=selected.calories,
+            protein_g=selected.protein_g,
+            prep_minutes=selected.prep_minutes,
+            step_count=selected.step_count,
+            effort_score=selected.effort_score,
+            suitable_when_tired=selected.suitable_when_tired,
+            cuisine=selected.cuisine,
+            source_url=selected.source_url,
+            source_title=selected.source_title,
+        ).model_dump(mode="json")
+        summary = f"import recipe {selected.name}"
+        if selected.source_title:
+            summary += f" from {selected.source_title}"
+        confirmation = self.confirmation_manager.request_confirmation(
+            user_id=user_id,
+            action="import_recipe",
+            arguments={"recipe": recipe_payload},
+            summary=summary,
+        )
+        pending = confirmation["pending_action"]
+        self.debug_log.record(
+            service="telegram",
+            direction="internal",
+            status="success",
+            summary="Created pending online recipe import confirmation.",
+            metadata={
+                "user_id": user_id,
+                "confirmation_id": pending["confirmation_id"],
+                "recipe_id": selected.id,
+                "recipe_name": selected.name,
+                "source_title": selected.source_title or "",
+                "source_url": selected.source_url or "",
+            },
+        )
+        source = selected.source_title or selected.source_url or "the web"
+        return (
+            f"I found a recipe online: {selected.name} from {source}.\n\n"
+            "Reply Yes to import it into your recipe list, or No to cancel."
+        )
+
+    async def _resolve_pending_confirmation_async(self, *, user_id: str, text: str) -> str | None:
+        intent = self._confirmation_intent(text)
+        if intent is None:
+            return None
+
+        pending = self.confirmation_manager.pending_actions(user_id)
+        if len(pending) != 1:
+            return None
+
+        confirmation_id = str(pending[0]["confirmation_id"])
+        self.debug_log.record(
+            service="telegram",
+            direction="internal",
+            status="success",
+            summary="Resolved plain-text confirmation against pending action.",
+            metadata={
+                "user_id": user_id,
+                "confirmation_id": confirmation_id,
+                "intent": intent,
+                "action": str(pending[0].get("action") or ""),
+            },
+        )
+
+        if intent == "cancel":
+            result = self.mcp_tool_service.cancel_pending_action(confirmation_id, user_id=user_id)
+            pending_action = result.get("pending_action") or {}
+            self.debug_log.record(
+                service="telegram",
+                direction="internal",
+                status="success",
+                summary="Cancelled pending action from Telegram reply.",
+                metadata={
+                    "user_id": user_id,
+                    "confirmation_id": confirmation_id,
+                    "action": str(pending_action.get("action") or ""),
+                },
+            )
+            if str(pending_action.get("action") or "") == "import_recipe":
+                return "Okay, I did not import that recipe."
+            return f"Okay, I cancelled: {str(pending_action.get('summary') or 'pending action')}."
+
+        result = self.mcp_tool_service.confirm_pending_action(confirmation_id, user_id=user_id)
+        pending_action = result.get("pending_action") or {}
+        confirmed_result = result.get("result") or {}
+        self.debug_log.record(
+            service="telegram",
+            direction="internal",
+            status="success",
+            summary="Confirmed pending action from Telegram reply.",
+            metadata={
+                "user_id": user_id,
+                "confirmation_id": confirmation_id,
+                "action": str(pending_action.get("action") or ""),
+            },
+        )
+        if str(pending_action.get("action") or "") == "import_recipe":
+            recipe = confirmed_result.get("recipe")
+            if isinstance(recipe, dict):
+                recipe_name = str(recipe.get("name") or "that recipe")
+                return f"Imported {recipe_name} into your recipe list. Use /recipes to see it."
+            return "Imported the recipe into your recipe list."
+        return f"Confirmed: {str(pending_action.get('summary') or 'pending action')}."
+
+    @staticmethod
+    def _confirmation_intent(text: str) -> str | None:
+        lowered = text.strip().lower()
+        if lowered in {"yes", "y", "yeah", "yep", "ok", "okay", "sure", "confirm"}:
+            return "confirm"
+        if lowered in {"no", "n", "nope", "cancel", "stop"}:
+            return "cancel"
+        return None
+
+    def _online_recipe_failure_reply(self, exc: Exception) -> str:
+        request_fingerprint = getattr(exc, "request_fingerprint", None)
+        fallback_metadata: dict[str, object] = {"error": str(exc)}
+        if isinstance(request_fingerprint, str) and request_fingerprint:
+            fallback_metadata["request_fingerprint"] = request_fingerprint
+        self.debug_log.record(
+            service="telegram",
+            direction="internal",
+            status="fallback_error",
+            summary="Online recipe search failed in Telegram direct search flow.",
+            metadata=fallback_metadata,
+        )
+        lowered = str(exc).lower()
+        reason = "the LLM provider rejected the request"
+        if "authentication" in lowered or "unauthorized" in lowered or "invalid api key" in lowered:
+            reason = "the LLM provider rejected authentication"
+        elif "invalid json" in lowered or "unterminated string" in lowered or "malformed" in lowered:
+            reason = "the recipe search response was malformed"
+        return (
+            f"I couldn’t search online recipes right now because {reason}. "
+            "I have not imported anything from the web. "
+            "I can still suggest meals from your saved recipes and current inventory."
+        )
 
     def _handle_heartbeat_command(self, *, user_id: str, command: str, chat_id: str | None) -> str:
         parts = command.split()
@@ -529,6 +790,27 @@ class TelegramService:
             "Heartbeat commands: /heartbeat status, /heartbeat on, /heartbeat off, "
             "/heartbeat time HH:MM, /heartbeat every MINUTES, /heartbeat interval MINUTES, /heartbeat now"
         )
+
+    def _handle_search_model_command(self, *, user_id: str, command: str) -> str:
+        parts = command.split(maxsplit=1)
+        current = self.llm_service.store.user_preferences(user_id).search_model
+        if len(parts) == 1 or not parts[1].strip():
+            return (
+                f"Current recipe search model: {current}\n"
+                f"Available models: {', '.join(ALLOWED_SEARCH_MODELS)}\n"
+                "Use /searchmodel <model> to change it."
+            )
+
+        requested = parts[1].strip()
+        if not is_valid_search_model(requested):
+            return (
+                f"Unsupported recipe search model: {requested}\n"
+                f"Available models: {', '.join(ALLOWED_SEARCH_MODELS)}\n"
+                f"Default: {DEFAULT_SEARCH_MODEL}"
+            )
+
+        updated = self.llm_service.store.set_user_preferences(user_id, search_model=requested)
+        return f"Recipe search model set to {updated.search_model}."
 
     async def _telegram_api_call_async(self, method_name: str, payload: dict[str, object]) -> dict[str, object]:
         if not self.settings.telegram_bot_token:
@@ -594,9 +876,12 @@ class TelegramService:
         loop = asyncio.get_running_loop()
         scheduled_updates: list[Future[object]] = []
 
+        async def deliver_draft(partial_text: str) -> None:
+            await draft_callback(partial_text)
+
         def on_progress(partial_text: str) -> None:
             scheduled_updates.append(
-                asyncio.run_coroutine_threadsafe(draft_callback(partial_text), loop)
+                asyncio.run_coroutine_threadsafe(deliver_draft(partial_text), loop)
             )
 
         reply = await asyncio.to_thread(
@@ -633,17 +918,29 @@ class TelegramService:
                 )
             return await self._generate_llm_reply_async(user_id=user_id, text=text)
         except Exception as exc:
+            request_fingerprint = getattr(exc, "request_fingerprint", None)
+            fallback_metadata: dict[str, object] = {"user_id": user_id, "error": str(exc)}
+            if isinstance(request_fingerprint, str) and request_fingerprint:
+                fallback_metadata["request_fingerprint"] = request_fingerprint
             self.debug_log.record(
                 service="telegram",
                 direction="internal",
                 status="fallback_error",
                 summary="LLM reply failed; using non-LLM fallback.",
-                metadata={"user_id": user_id, "error": str(exc)},
+                metadata=fallback_metadata,
             )
             reason = "the LLM provider rejected the request"
             lowered = str(exc).lower()
             if "authentication" in lowered or "unauthorized" in lowered or "invalid api key" in lowered:
                 reason = "the LLM provider rejected authentication"
+            elif "invalid json" in lowered or "unterminated string" in lowered or "malformed" in lowered:
+                reason = "the recipe search response was malformed"
+            if self.llm_service.is_explicit_online_recipe_request(text):
+                return (
+                    f"I couldn’t search online recipes right now because {reason}. "
+                    "I have not imported anything from the web. "
+                    "I can still suggest meals from your saved recipes and current inventory."
+                )
             if fallback_reply:
                 return f"{fallback_reply}\n\nNote: richer LLM replies are currently unavailable because {reason}."
             return (

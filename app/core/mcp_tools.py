@@ -18,6 +18,7 @@ from app.core.heartbeat_service import HeartbeatService
 from app.core.integration_debug import IntegrationDebugLog
 from app.core.llm_gateway import LLMGatewayService
 from app.core.recipe_discovery_service import RecipeDiscoveryService
+from app.core.search_models import ALLOWED_SEARCH_MODELS, DEFAULT_SEARCH_MODEL, is_valid_search_model
 from app.core.runtime_state import RuntimeStateAggregator
 from app.core.time_utils import utc_now
 from app.core.tracing import record_tool_call, record_tools_exposed
@@ -250,7 +251,8 @@ class MCPToolService:
         if tool_name == "search_recipes_online":
             query = str(arguments.get("query") or "").strip()
             max_results = self._coerce_int(arguments.get("max_results"), default=3)
-            recipes = self.recipe_discovery_service.search_online_recipes(query=query, max_results=max_results)
+            user_id = str(arguments.get("user_id") or "").strip() or None
+            recipes = self.recipe_discovery_service.search_online_recipes(query=query, max_results=max_results, user_id=user_id)
             return {"tool_name": tool_name, "query": query, "results": [recipe.model_dump(mode="json") for recipe in recipes]}
 
         if tool_name == "import_recipe":
@@ -264,7 +266,8 @@ class MCPToolService:
             query = str(arguments.get("query") or "").strip()
             max_results = self._coerce_int(arguments.get("max_results"), default=3)
             selection_index = self._coerce_int(arguments.get("selection_index"), default=0)
-            recipes = self.recipe_discovery_service.search_online_recipes(query=query, max_results=max_results)
+            user_id = str(arguments.get("user_id") or "").strip() or None
+            recipes = self.recipe_discovery_service.search_online_recipes(query=query, max_results=max_results, user_id=user_id)
             if not recipes:
                 raise ValueError("No recipes were returned from online search.")
             if selection_index < 0 or selection_index >= len(recipes):
@@ -441,6 +444,11 @@ class MCPToolService:
             dietary_preferences = arguments.get("dietary_preferences")
             if dietary_preferences is not None and not isinstance(dietary_preferences, list):
                 raise ValueError("dietary_preferences must be a list of strings.")
+            search_model = str(arguments.get("search_model") or "").strip() or None
+            if search_model is not None and not is_valid_search_model(search_model):
+                raise ValueError(
+                    f"search_model must be one of: {', '.join(ALLOWED_SEARCH_MODELS)}."
+                )
             preferences = self.store.set_user_preferences(
                 user_id,
                 mode=str(arguments.get("mode") or "").strip() or None,
@@ -451,6 +459,7 @@ class MCPToolService:
                 max_prep_minutes=self._coerce_int(arguments.get("max_prep_minutes")) if arguments.get("max_prep_minutes") not in (None, "") else None,
                 notification_frequency=str(arguments.get("notification_frequency") or "").strip() or None,
                 dietary_preferences=[str(value) for value in dietary_preferences] if isinstance(dietary_preferences, list) else None,
+                search_model=search_model,
             )
             return {"tool_name": tool_name, **preferences.model_dump(mode="json")}
 
@@ -564,9 +573,9 @@ class MCPToolService:
             ("clear_inventory", "Delete all inventory items after confirmation.", {"user_id": "string"}, "destructive", "User explicitly asks to clear/delete all inventory.", "Any ambiguous inventory request.", "InventoryAgent"),
             ("add_to_shopping_list", "Add one item to the pending shopping list without checkout.", {"name": "string", "quantity": "number", "unit": "string", "reason": "string"}, "write", "User asks to remember an item to buy.", "User asks to place an order.", "ContextStore pending_grocery_list"),
             ("list_recipes", "Read the recipe catalog.", {}, "read", "Asked for available recipes.", "Need online discovery.", "RecipeAgent"),
-            ("search_recipes_online", "Search the web for recipes and return importable recipe candidates.", {"query": "string", "max_results": "integer"}, "read", "Asked to find new recipes online.", "Asked only for local catalog.", "RecipeDiscoveryService"),
+            ("search_recipes_online", "Search the web for recipes and return importable recipe candidates. Prefer this when the user wants to review options before saving one. Include user_id when available so the user's search_model applies.", {"query": "string", "max_results": "integer", "user_id": "string"}, "read", "Asked to find new recipes online and review candidates first.", "Asked only for local catalog or wants immediate top-result import.", "RecipeDiscoveryService"),
             ("import_recipe", "Add a recipe to the shared recipe catalog.", {"recipe": "object"}, "write", "User asks to save a selected recipe.", "User only wants suggestions.", "RecipeAgent"),
-            ("search_and_import_recipe", "Search recipes online and immediately import one result into the catalog.", {"query": "string", "selection_index": "integer", "max_results": "integer"}, "write", "User asks to find and save an online recipe in one step.", "User wants to review candidates first.", "RecipeDiscoveryService + RecipeAgent"),
+            ("search_and_import_recipe", "Search recipes online and immediately import one result into the catalog. For conversational online recipe requests, prefer selection_index 0 as the default top-result import. Include user_id when available so the user's search_model applies.", {"query": "string", "selection_index": "integer", "max_results": "integer", "user_id": "string"}, "write", "User asks to find an online or new recipe in one step.", "User wants to review candidates first.", "RecipeDiscoveryService + RecipeAgent"),
             ("get_utilities", "Read current fridge water and ice levels.", {}, "read", "Asked about water, ice, or fridge utilities.", "Need diagnostics across all components.", "UtilityAgent"),
             ("update_utilities", "Update fridge water and or ice levels.", {"water_level_percent": "integer", "ice_level_percent": "integer"}, "write", "User gives a new water or ice level.", "User asks for current level only.", "UtilityAgent"),
             ("get_nutrition_summary", "Read the current nutrition summary.", {}, "read", "Asked about nutrition, calories, protein, or meal patterns.", "Asked only about stock.", "NutritionAgent"),
@@ -584,11 +593,11 @@ class MCPToolService:
             ("fs_search_text", "Search text within readable repo files. Access requirement: read_only or read_write.", {"query": "string", "path": "string", "max_results": "integer"}, "read", "Need to find symbols, strings, or references across files.", "Already know the exact file to read.", "LLMGatewayService"),
             ("fs_write_text", "Create or replace a UTF-8 text file in a read_write repo path. Access requirement: read_write.", {"path": "string", "content": "string"}, "write", "Need to create or fully rewrite a writable file.", "Need to append only.", "LLMGatewayService"),
             ("fs_append_text", "Append UTF-8 text to a file in a read_write repo path. Access requirement: read_write.", {"path": "string", "content": "string"}, "write", "Need to add content without replacing the existing file.", "Need to overwrite the file.", "LLMGatewayService"),
-            ("terminal_exec", "Run a guarded PowerShell command inside the repo with explicit read_only or read_write mode. Access requirement: cwd must be readable, and read_write mode requires a read_write cwd.", {"command": "string", "cwd": "string", "mode": "string"}, "write", "Need CLI-style traversal or inspection similar to a repo shell.", "A file tool already covers the task more safely.", "LLMGatewayService"),
+            ("terminal_exec", "Run a guarded shell command inside the repo with explicit read_only or read_write mode. Access requirement: cwd must be readable, and read_write mode requires a read_write cwd.", {"command": "string", "cwd": "string", "mode": "string"}, "write", "Need CLI-style traversal or inspection similar to a repo shell.", "A file tool already covers the task more safely.", "LLMGatewayService"),
             ("get_decision_state", "Read the public steering state: preferences, temporary states, session status, and recent interventions.", {"user_id": "string"}, "read", "Need current user steering state before deciding whether to intervene.", "Need hidden learned profile internals.", "DecisionEngine public state"),
             ("run_decision", "Run the adaptive decision engine once for a user without sending a Telegram message.", {"user_id": "string", "force": "string"}, "read", "Need to preview the current best intervention.", "Need to actually notify a user.", "DecisionEngine"),
-            ("get_user_preferences", "Read the user-editable preference layer.", {"user_id": "string"}, "read", "Need explicit preferences like mode, windows, effort, or dietary settings.", "Need learned hidden profile values.", "UserPreferences"),
-            ("set_user_preferences", "Update the user-editable preference layer.", {"user_id": "string", "mode": "string", "meal_window_start": "string", "meal_window_end": "string", "late_night_window_start": "string", "late_night_window_end": "string", "max_prep_minutes": "integer", "notification_frequency": "string", "dietary_preferences": "array"}, "write", "User explicitly changes preference settings.", "Need temporary one-off context; use set_user_state.", "UserPreferences"),
+            ("get_user_preferences", "Read the user-editable preference layer, including the per-user recipe search model.", {"user_id": "string"}, "read", "Need explicit preferences like mode, windows, effort, dietary settings, or recipe search model.", "Need learned hidden profile values.", "UserPreferences"),
+            ("set_user_preferences", f"Update the user-editable preference layer, including search_model. Allowed search_model values: {', '.join(ALLOWED_SEARCH_MODELS)}.", {"user_id": "string", "mode": "string", "meal_window_start": "string", "meal_window_end": "string", "late_night_window_start": "string", "late_night_window_end": "string", "max_prep_minutes": "integer", "notification_frequency": "string", "dietary_preferences": "array", "search_model": "string"}, "write", "User explicitly changes preference settings.", "Need temporary one-off context; use set_user_state.", "UserPreferences"),
             ("get_user_state", "Read active temporary state overrides for a user.", {"user_id": "string"}, "read", "Need the current temporary context like tired, commuting, or not_home.", "Need persistent preferences.", "TemporaryStateOverride"),
             ("set_user_state", "Set a temporary state override for a user.", {"user_id": "string", "state": "string", "duration_hours": "integer", "value": "string", "note": "string"}, "write", "User gives short-term context like being tired or not home.", "Need durable preferences.", "TemporaryStateOverride"),
             ("record_decision_feedback", "Record feedback for an assistant intervention.", {"user_id": "string", "intervention_id": "string", "thread_key": "string", "status": "string", "detail": "string"}, "write", "Need to learn from a user's response to a nudge.", "No intervention exists to update.", "DecisionEngine"),
@@ -685,6 +694,11 @@ class MCPToolService:
                 "dietary_preferences": {
                     "type": "array",
                     "items": {"type": "string"},
+                },
+                "search_model": {
+                    "type": "string",
+                    "enum": list(ALLOWED_SEARCH_MODELS),
+                    "default": DEFAULT_SEARCH_MODEL,
                 },
             },
             "required": ["user_id"],

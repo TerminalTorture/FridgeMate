@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.core.search_models import DEFAULT_SEARCH_MODEL
+
 
 class InventoryItem(BaseModel):
     name: str
@@ -139,6 +141,7 @@ class UserPreferences(BaseModel):
     max_prep_minutes: int = 10
     notification_frequency: str = "normal"
     dietary_preferences: list[str] = Field(default_factory=list)
+    search_model: str = DEFAULT_SEARCH_MODEL
 
 
 class TemporaryStateOverride(BaseModel):

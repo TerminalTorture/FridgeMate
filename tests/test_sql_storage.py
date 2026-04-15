@@ -36,6 +36,7 @@ class SQLStorageTest(unittest.TestCase):
         inspector = inspect(engine)
         table_names = set(inspector.get_table_names())
         recipe_columns = {column["name"] for column in inspector.get_columns("recipes")}
+        user_preference_columns = {column["name"] for column in inspector.get_columns("user_preferences")}
         engine.dispose()
 
         self.assertIn("inventory_items", table_names)
@@ -50,6 +51,7 @@ class SQLStorageTest(unittest.TestCase):
         self.assertIn("step_count", recipe_columns)
         self.assertIn("effort_score", recipe_columns)
         self.assertIn("suitable_when_tired", recipe_columns)
+        self.assertIn("search_model", user_preference_columns)
 
     def test_seed_history_creates_six_months_of_activity(self) -> None:
         self.store = ContextStore(
@@ -118,6 +120,43 @@ class SQLStorageTest(unittest.TestCase):
         self.assertIn("step_count", recipe_columns)
         self.assertIn("effort_score", recipe_columns)
         self.assertIn("suitable_when_tired", recipe_columns)
+
+    def test_context_store_upgrades_older_user_preferences_schema_on_startup(self) -> None:
+        engine = create_engine(self.database_url, future=True)
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                """
+                CREATE TABLE user_preferences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id VARCHAR(255) NOT NULL UNIQUE,
+                    mode VARCHAR(20) NOT NULL DEFAULT 'lazy',
+                    meal_window_start VARCHAR(10) NOT NULL DEFAULT '18:00',
+                    meal_window_end VARCHAR(10) NOT NULL DEFAULT '21:00',
+                    late_night_window_start VARCHAR(10) NOT NULL DEFAULT '22:30',
+                    late_night_window_end VARCHAR(10) NOT NULL DEFAULT '00:30',
+                    max_prep_minutes INTEGER NOT NULL DEFAULT 10,
+                    notification_frequency VARCHAR(20) NOT NULL DEFAULT 'normal',
+                    dietary_preferences JSON NOT NULL DEFAULT '[]',
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        engine.dispose()
+
+        self.store = ContextStore(
+            build_initial_context(),
+            database_url=self.database_url,
+            sql_echo=False,
+            storage_path=None,
+            seed_history_on_startup=False,
+        )
+
+        engine = create_engine(self.database_url, future=True)
+        inspector = inspect(engine)
+        user_preference_columns = {column["name"] for column in inspector.get_columns("user_preferences")}
+        engine.dispose()
+
+        self.assertIn("search_model", user_preference_columns)
 
 
 if __name__ == "__main__":
