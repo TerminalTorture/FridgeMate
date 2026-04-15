@@ -83,6 +83,12 @@ class MCPToolSmokeTest(unittest.TestCase):
             ][:max_results]
 
         self.container.recipe_discovery_service.search_online_recipes = fake_search
+        self.container.llm_service.generate_online_recipe_preview = lambda **kwargs: (
+            "I found a recipe online: Test Online Recipe from Example Recipe.\n"
+            "Link: https://example.com/recipe\n"
+            "Key ingredients: Egg.\n\n"
+            "Reply Yes to import it into your recipe list, or No to cancel."
+        )
 
     def tearDown(self) -> None:
         self.container.store.close()
@@ -467,6 +473,21 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertIn("did not import", cancel_reply.lower())
         self.assertNotIn("Test Online Recipe", recipes_reply)
 
+    def test_online_recipe_preview_fallback_includes_link_and_ingredients(self) -> None:
+        def fail_preview(**kwargs):
+            raise RuntimeError("preview failed")
+
+        self.container.llm_service.generate_online_recipe_preview = fail_preview
+
+        reply = self.container.telegram_service.build_reply_for_user(
+            "u-online-preview-fallback",
+            "search for nasi lemak recipe",
+            chat_id="chat-online-preview-fallback",
+        )
+
+        self.assertIn("https://example.com/recipe", reply)
+        self.assertIn("Key ingredients: Egg", reply)
+
     def test_mcp_tool_can_set_search_model(self) -> None:
         result = self.container.mcp_tool_service.call_tool(
             "set_user_preferences",
@@ -791,7 +812,49 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertEqual(recipes[0].name, "Web Pasta")
         self.assertEqual(recipes[0].source_url, "https://example.com/web-pasta")
         self.assertEqual(recipes[0].source_title, "Example Pasta")
-        self.assertEqual(recipes[0].cuisine, "italian")
+
+    def test_recipe_discovery_service_clamps_effort_score(self) -> None:
+        service = RecipeDiscoveryService(llm_service=self.container.llm_service)
+
+        def fake_create_chat_completion(payload: dict[str, object]) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "recipes": [
+                                        {
+                                            "id": "heavy_recipe",
+                                            "name": "Heavy Recipe",
+                                            "description": "Found online.",
+                                            "ingredients": [{"name": "Rice", "quantity": 1, "unit": "cup"}],
+                                            "instructions": ["Cook rice."],
+                                            "tags": ["test"],
+                                            "calories": 400,
+                                            "protein_g": 8,
+                                            "prep_minutes": 20,
+                                            "step_count": 1,
+                                            "effort_score": 3.0,
+                                            "suitable_when_tired": False,
+                                            "cuisine": "malay",
+                                            "source_url": "https://example.com/heavy",
+                                            "source_title": "Heavy Recipe Source",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+
+        self.container.llm_service.create_chat_completion = fake_create_chat_completion
+        recipes = service.search_online_recipes("nasi lemak", max_results=1)
+
+        self.assertEqual(len(recipes), 1)
+        self.assertEqual(recipes[0].effort_score, 1.0)
+        self.assertEqual(recipes[0].cuisine, "malay")
 
     def test_recipe_discovery_payload_validator_accepts_documented_shape(self) -> None:
         service = RecipeDiscoveryService(llm_service=self.container.llm_service)

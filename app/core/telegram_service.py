@@ -598,7 +598,7 @@ class TelegramService:
             id=selected.id,
             name=selected.name,
             description=selected.description,
-            ingredients=selected.ingredients,
+            ingredients=[ingredient.model_dump(mode="json") for ingredient in selected.ingredients],
             instructions=selected.instructions,
             tags=selected.tags,
             calories=selected.calories,
@@ -635,10 +635,10 @@ class TelegramService:
                 "source_url": selected.source_url or "",
             },
         )
-        source = selected.source_title or selected.source_url or "the web"
-        return (
-            f"I found a recipe online: {selected.name} from {source}.\n\n"
-            "Reply Yes to import it into your recipe list, or No to cancel."
+        return await self._build_online_recipe_preview_async(
+            user_id=user_id,
+            user_message=text,
+            recipe=selected,
         )
 
     async def _resolve_pending_confirmation_async(self, *, user_id: str, text: str) -> str | None:
@@ -736,6 +736,52 @@ class TelegramService:
             "I have not imported anything from the web. "
             "I can still suggest meals from your saved recipes and current inventory."
         )
+
+    async def _build_online_recipe_preview_async(
+        self,
+        *,
+        user_id: str,
+        user_message: str,
+        recipe,
+    ) -> str:
+        conversation_context = self.conversation_manager.build_prompt_context(user_id)
+        try:
+            return await asyncio.to_thread(
+                self.llm_service.generate_online_recipe_preview,
+                user_id=user_id,
+                user_message=user_message,
+                conversation_context=conversation_context,
+                recipe=recipe,
+            )
+        except Exception as exc:
+            self.debug_log.record(
+                service="telegram",
+                direction="internal",
+                status="fallback",
+                summary="Falling back to deterministic online recipe preview.",
+                metadata={"user_id": user_id, "error": str(exc)},
+            )
+            return self._deterministic_online_recipe_preview(recipe)
+
+    @staticmethod
+    def _deterministic_online_recipe_preview(recipe) -> str:
+        source = recipe.source_title or recipe.source_url or "the web"
+        link_line = f"Link: {recipe.source_url}\n" if recipe.source_url else ""
+        ingredients = ", ".join(ingredient.name for ingredient in recipe.ingredients[:6]) or "ingredient details unavailable"
+        fit_parts = [
+            f"prep about {recipe.prep_minutes} min",
+            f"cuisine {recipe.cuisine}",
+        ]
+        if recipe.calories:
+            fit_parts.append(f"about {recipe.calories} kcal")
+        fit_summary = " | ".join(fit_parts)
+        return (
+            f"I found a recipe online: {recipe.name} from {source}.\n"
+            f"{link_line}"
+            f"Key ingredients: {ingredients}.\n"
+            f"Quick fit: {fit_summary}.\n\n"
+            "Reply Yes to import it into your recipe list, or No to cancel."
+        ).strip()
 
     def _handle_heartbeat_command(self, *, user_id: str, command: str, chat_id: str | None) -> str:
         parts = command.split()

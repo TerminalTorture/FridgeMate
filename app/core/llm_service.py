@@ -14,6 +14,7 @@ from app.core.prompt_builder import PromptBuilder
 from app.core.settings import Settings, get_settings
 from app.core.system_prompt import SYSTEM_PROMPT
 from app.core.tracing import add_event, record_tools_exposed
+from app.models.domain import Recipe
 
 if TYPE_CHECKING:
     from app.core.mcp_tools import MCPToolService
@@ -238,6 +239,63 @@ class LLMService:
             }
         raise RuntimeError("Streaming LLM response did not contain a completed response.")
 
+    def generate_online_recipe_preview(
+        self,
+        *,
+        user_id: str,
+        user_message: str,
+        conversation_context: str | None,
+        recipe: Recipe,
+    ) -> str:
+        if not self.is_configured():
+            raise RuntimeError("LLM_API_KEY is not configured.")
+
+        preferences = self.store.user_preferences(user_id)
+        ingredients_text = ", ".join(
+            f"{ingredient.name} ({ingredient.quantity:g} {ingredient.unit})"
+            for ingredient in recipe.ingredients[:8]
+        ) or "not available"
+        source_text = recipe.source_title or recipe.source_url or "online source"
+        prompt = (
+            f"Telegram user id: {user_id}\n"
+            f"Original request: {user_message}\n"
+            f"Conversation context:\n{conversation_context.strip() if conversation_context else 'No prior session context.'}\n\n"
+            "User preference summary:\n"
+            f"- Mode: {preferences.mode}\n"
+            f"- Max prep minutes: {preferences.max_prep_minutes}\n"
+            f"- Dietary preferences: {', '.join(preferences.dietary_preferences) or 'none'}\n\n"
+            "Found online recipe candidate:\n"
+            f"- Name: {recipe.name}\n"
+            f"- Description: {recipe.description}\n"
+            f"- Cuisine: {recipe.cuisine}\n"
+            f"- Prep minutes: {recipe.prep_minutes}\n"
+            f"- Effort score: {recipe.effort_score}\n"
+            f"- Calories: {recipe.calories}\n"
+            f"- Protein: {recipe.protein_g}\n"
+            f"- Source: {source_text}\n"
+            f"- URL: {recipe.source_url or 'not available'}\n"
+            f"- Key ingredients: {ingredients_text}\n"
+        )
+        payload: dict[str, object] = {
+            "model": self.settings.llm_model,
+            "instructions": (
+                "You are MCP Fridge writing a Telegram reply. "
+                "Summarize the found online recipe in plain text with light personalization based only on the provided context. "
+                "Include the recipe name, the source title or URL, a direct link line if a URL is available, and a short key-ingredients summary. "
+                "Optionally mention why it may or may not fit the user's preferences or prep constraints. "
+                "Do not invent ingredients, steps, links, or user preferences. "
+                "End with exactly one short confirmation question asking whether to import it into the recipe list."
+            ),
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                }
+            ],
+        }
+        response_payload = self.create_response(payload)
+        return self._extract_output_text(response_payload)
+
     def _complete_tool_loop(
         self,
         response_payload: dict[str, object],
@@ -443,6 +501,7 @@ class LLMService:
         if not has_recipe_cue:
             return False
         explicit_cues = (
+            "search for",
             "search online",
             "search the web",
             "find online",

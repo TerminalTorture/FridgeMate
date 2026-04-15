@@ -103,7 +103,7 @@ class RecipeDiscoveryService:
                     protein_g=int(item.get("protein_g") or 0),
                     prep_minutes=int(item.get("prep_minutes") or 10),
                     step_count=int(item.get("step_count") or 3),
-                    effort_score=float(item.get("effort_score") or 0.4),
+                    effort_score=self._normalized_effort_score(item.get("effort_score")),
                     suitable_when_tired=bool(item.get("suitable_when_tired", True)),
                     cuisine=str(item.get("cuisine") or "global"),
                     source_url=self._optional_text(item.get("source_url")),
@@ -261,6 +261,14 @@ class RecipeDiscoveryService:
             return None
         text = str(value).strip()
         return text or None
+
+    @staticmethod
+    def _normalized_effort_score(value: object) -> float:
+        try:
+            numeric = float(value or 0.4)
+        except (TypeError, ValueError):
+            return 0.4
+        return max(0.0, min(numeric, 1.0))
 
     @staticmethod
     def _recipe_search_schema() -> dict[str, object]:
