@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import hashlib
 import json
 import re
@@ -18,6 +19,12 @@ from app.models.domain import Recipe
 
 if TYPE_CHECKING:
     from app.core.mcp_tools import MCPToolService
+
+
+@dataclass
+class LLMReplyResult:
+    text: str
+    tool_results: list[dict[str, object]] = field(default_factory=list)
 
 
 class LLMService:
@@ -47,6 +54,18 @@ class LLMService:
         user_message: str,
         conversation_context: str | None = None,
     ) -> str:
+        return self.generate_reply_result(
+            user_id=user_id,
+            user_message=user_message,
+            conversation_context=conversation_context,
+        ).text
+
+    def generate_reply_result(
+        self,
+        user_id: str,
+        user_message: str,
+        conversation_context: str | None = None,
+    ) -> LLMReplyResult:
         if not self.is_configured():
             raise RuntimeError("LLM_API_KEY is not configured.")
 
@@ -67,7 +86,7 @@ class LLMService:
 
         response_payload = self.create_response(payload)
         if self.mcp_tool_service is None:
-            return self._extract_output_text(response_payload)
+            return LLMReplyResult(text=self._extract_output_text(response_payload))
         return self._complete_tool_loop(
             response_payload,
             instructions=instructions,
@@ -80,6 +99,20 @@ class LLMService:
         conversation_context: str | None = None,
         on_progress: Callable[[str], None] | None = None,
     ) -> str:
+        return self.generate_reply_streaming_result(
+            user_id=user_id,
+            user_message=user_message,
+            conversation_context=conversation_context,
+            on_progress=on_progress,
+        ).text
+
+    def generate_reply_streaming_result(
+        self,
+        user_id: str,
+        user_message: str,
+        conversation_context: str | None = None,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> LLMReplyResult:
         if not self.is_configured():
             raise RuntimeError("LLM_API_KEY is not configured.")
 
@@ -103,7 +136,7 @@ class LLMService:
 
         response_payload = self.create_response_streaming(payload, on_progress=on_progress)
         if self.mcp_tool_service is None:
-            return self._extract_output_text(response_payload)
+            return LLMReplyResult(text=self._extract_output_text(response_payload))
         return self._complete_tool_loop(
             response_payload,
             instructions=instructions,
@@ -304,17 +337,21 @@ class LLMService:
         max_rounds: int = 6,
         on_progress: Callable[[str], None] | None = None,
         stream_responses: bool = False,
-    ) -> str:
+    ) -> LLMReplyResult:
         if self.mcp_tool_service is None:
-            return self._extract_output_text(response_payload)
+            return LLMReplyResult(text=self._extract_output_text(response_payload))
 
         current = response_payload
+        tool_results: list[dict[str, object]] = []
         for _ in range(max_rounds):
             function_calls = self._extract_function_calls(current)
             if not function_calls:
                 if on_progress is not None:
                     on_progress("Finalizing reply...")
-                return self._extract_output_text(current)
+                return LLMReplyResult(
+                    text=self._extract_output_text(current),
+                    tool_results=tool_results,
+                )
 
             if on_progress is not None:
                 on_progress(self._tool_progress_message(function_calls))
@@ -322,6 +359,7 @@ class LLMService:
             tool_outputs: list[dict[str, object]] = []
             for call in function_calls:
                 result = self.mcp_tool_service.call_tool(call["name"], call["arguments"])
+                tool_results.append(result)
                 tool_outputs.append(
                     {
                         "type": "function_call_output",

@@ -1,28 +1,48 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from concurrent.futures import Future
-from itertools import count
-from typing import Awaitable, Callable
+from dataclasses import asdict, dataclass
+from datetime import timedelta
+from typing import Awaitable, Callable, TypedDict
 
-from app.core.confirmation_manager import ConfirmationManager
+from app.core.confirmation_manager import ConfirmationManager, PendingConfirmationPayload
 from app.core.conversation_manager import ConversationManager
 from app.core.decision_engine import DecisionEngine
 from app.core.heartbeat_service import HeartbeatService
 from app.core.http_client import post_json
 from app.core.integration_debug import IntegrationDebugLog
-from app.core.llm_service import LLMService
+from app.core.llm_service import LLMReplyResult, LLMService
 from app.core.orchestrator import MCPFridgeOrchestrator
 from app.core.recipe_discovery_service import RecipeDiscoveryService, RecipeSearchChatCompletionError
 from app.core.search_models import ALLOWED_SEARCH_MODELS, DEFAULT_SEARCH_MODEL, is_valid_search_model
 from app.core.settings import Settings, get_settings
+from app.core.time_utils import utc_now
 from app.core.tracing import add_event, trace_scope, update_trace_metadata
-from app.models.api import RecipeInput
+from app.models.api import RecipeIngredientInput, RecipeInput
+
+
+@dataclass
+class BulkInventoryCandidate:
+    name: str
+    quantity: float
+    unit: str
+    category: str
+    source_line: str
+    ambiguous: bool = False
+
+
+class BulkInventoryPendingContext(TypedDict):
+    candidates: list[BulkInventoryCandidate]
+    skipped_lines: list[str]
 
 
 class TelegramService:
     _TELEGRAM_MESSAGE_LIMIT = 4000
     _TELEGRAM_DRAFT_LIMIT = 4096
+    _PENDING_BULK_INVENTORY_STATE = "pending_bulk_inventory_import"
     _BOT_COMMANDS = [
         {"command": "start", "description": "Show the FridgeMate command list"},
         {"command": "help", "description": "Show the FridgeMate command list"},
@@ -59,7 +79,6 @@ class TelegramService:
         self.mcp_tool_service = mcp_tool_service
         self.settings = settings or get_settings()
         self.debug_log = IntegrationDebugLog()
-        self._draft_id_counter = count(1)
         self._draft_streaming_supported: bool | None = None
 
     def handle_webhook(
@@ -131,12 +150,15 @@ class TelegramService:
             update_trace_metadata(user_id=user_id, chat_id=chat_id)
             add_event(name="telegram_message_received", detail={"text_chars": len(text)})
             self.heartbeat_service.register_chat(user_id, chat_id)
-            reply = await self.build_reply_for_user_with_streaming_async(
+            reply, streamed_via_edit = await self.build_reply_for_user_with_streaming_async(
                 user_id=user_id,
                 text=text,
                 chat_id=chat_id,
             )
-            telegram_result = await self.send_message_async(chat_id=chat_id, text=reply)
+            if streamed_via_edit:
+                telegram_result = {"ok": True, "streamed": True}
+            else:
+                telegram_result = await self.send_message_async(chat_id=chat_id, text=reply)
             return {"ok": True, "status": "sent", "reply": reply, "telegram": telegram_result}
 
     def get_updates(
@@ -284,30 +306,22 @@ class TelegramService:
         assert last_error is not None
         raise last_error
 
-    async def send_message_draft_async(
+    async def edit_message_text_async(
         self,
-        chat_id: str | int,
-        draft_id: int,
-        text: str,
         *,
-        message_thread_id: int | None = None,
-        parse_mode: str | None = None,
-        entities: list[dict[str, object]] | None = None,
-    ) -> bool:
+        chat_id: str | int,
+        message_id: int,
+        text: str,
+        reply_markup: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "chat_id": self._normalize_chat_id(chat_id),
-            "draft_id": draft_id,
+            "message_id": message_id,
             "text": text[: self._TELEGRAM_DRAFT_LIMIT],
         }
-        if message_thread_id is not None:
-            payload["message_thread_id"] = message_thread_id
-        if parse_mode is not None:
-            payload["parse_mode"] = parse_mode
-        if entities is not None:
-            payload["entities"] = entities
-
-        await self._telegram_api_call_async("sendMessageDraft", payload)
-        return True
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        return await self._telegram_api_call_async("editMessageText", payload)
 
     async def answer_callback_query_async(self, callback_query_id: str, text: str | None = None) -> dict[str, object]:
         payload: dict[str, object] = {"callback_query_id": callback_query_id}
@@ -324,15 +338,17 @@ class TelegramService:
         user_id: str,
         text: str,
         chat_id: str,
-    ) -> str:
-        draft_callback = self._build_draft_sender(chat_id=chat_id, draft_id=next(self._draft_id_counter))
+    ) -> tuple[str, bool]:
+        draft_callback, was_streamed = self._build_draft_sender(chat_id=chat_id)
         await draft_callback("Working on it...")
-        return await self.build_reply_for_user_async(
+        reply = await self.build_reply_for_user_async(
             user_id=user_id,
             text=text,
             chat_id=chat_id,
             draft_callback=draft_callback,
         )
+        await draft_callback(reply)
+        return reply, was_streamed()
 
     async def build_reply_for_user_async(
         self,
@@ -392,6 +408,15 @@ class TelegramService:
             self.conversation_manager.register_assistant_turn(user_id, pending_reply)
             return pending_reply
 
+        bulk_inventory_reply = await self._maybe_handle_bulk_inventory_import_async(
+            user_id=user_id,
+            text=text,
+            draft_callback=draft_callback,
+        )
+        if bulk_inventory_reply is not None:
+            self.conversation_manager.register_assistant_turn(user_id, bulk_inventory_reply)
+            return bulk_inventory_reply
+
         if translated == "__recipes_catalog__":
             reply = self._format_recipe_catalog_reply()
             self.conversation_manager.register_assistant_turn(user_id, reply)
@@ -414,11 +439,16 @@ class TelegramService:
 
         if self.llm_service.is_configured() and self._should_use_llm_first(text=text, translated=translated):
             fallback_result = await self._orchestrator_result_async(user_id=user_id, message=translated)
-            reply = await self._generate_llm_reply_with_fallback(
+            reply_result = await self._generate_llm_reply_with_fallback(
                 user_id=user_id,
                 text=text,
                 fallback_reply=str(fallback_result["reply"]),
                 draft_callback=draft_callback,
+            )
+            reply = self._guard_inventory_mutation_reply(
+                text=text,
+                reply_result=reply_result,
+                conversation_context=self.conversation_manager.build_prompt_context(user_id),
             )
             self.conversation_manager.register_assistant_turn(user_id, reply)
             return reply
@@ -433,17 +463,238 @@ class TelegramService:
             return reply
 
         if self.llm_service.is_configured():
-            reply = await self._generate_llm_reply_with_fallback(
+            reply_result = await self._generate_llm_reply_with_fallback(
                 user_id=user_id,
                 text=text,
                 fallback_reply=reply,
                 draft_callback=draft_callback,
+            )
+            reply = self._guard_inventory_mutation_reply(
+                text=text,
+                reply_result=reply_result,
+                conversation_context=self.conversation_manager.build_prompt_context(user_id),
             )
             self.conversation_manager.register_assistant_turn(user_id, reply)
             return reply
 
         self.conversation_manager.register_assistant_turn(user_id, reply)
         return reply
+
+    async def _maybe_handle_bulk_inventory_import_async(
+        self,
+        *,
+        user_id: str,
+        text: str,
+        draft_callback: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str | None:
+        direct_request = self._is_bulk_inventory_request(text)
+        pending_context = self._load_pending_bulk_inventory_context(user_id)
+        follow_up_request = pending_context is not None and self._is_bulk_inventory_follow_up(text)
+
+        if not direct_request and not follow_up_request:
+            return None
+
+        if draft_callback is not None:
+            await draft_callback("Checking fridge data...")
+
+        if direct_request:
+            candidates, skipped_lines = self._parse_bulk_inventory_candidates(text)
+            if not candidates:
+                return (
+                    "I could not find any concrete inventory items to add from that list.\n"
+                    "Please resend the items with clearer names or quantities."
+                )
+            self._store_pending_bulk_inventory_context(user_id, candidates, skipped_lines)
+        else:
+            assert pending_context is not None
+            candidates = pending_context["candidates"]
+            skipped_lines = pending_context["skipped_lines"]
+
+        added_items = self._add_bulk_inventory_candidates(candidates)
+        self._clear_pending_bulk_inventory_context(user_id)
+
+        if not added_items:
+            return (
+                "I have not updated inventory yet.\n"
+                "I could not convert that list into concrete inventory items."
+            )
+
+        added_names_list = [str(item.get("name") or "") for item in added_items[:8]]
+        added_names = ", ".join(name for name in added_names_list if name)
+        lines = [
+            f"Added {len(added_items)} item(s) to inventory with sensible default quantities and units.",
+            f"Added: {added_names}" + ("." if added_names else ""),
+        ]
+        if skipped_lines:
+            skipped_text = ", ".join(skipped_lines[:6])
+            lines.append(f"Skipped ambiguous lines: {skipped_text}.")
+        lines.append("You can ask for /inventory to see the updated fridge list.")
+        return "\n".join(lines)
+
+    def _add_bulk_inventory_candidates(self, candidates: list[BulkInventoryCandidate]) -> list[dict[str, object]]:
+        added_items: list[dict[str, object]] = []
+        for candidate in candidates:
+            result = self.mcp_tool_service.call_tool(
+                "add_inventory_item",
+                {
+                    "name": candidate.name,
+                    "quantity": candidate.quantity,
+                    "unit": candidate.unit,
+                    "category": candidate.category,
+                },
+            )
+            item = result.get("item")
+            if isinstance(item, dict):
+                added_items.append(item)
+        return added_items
+
+    @classmethod
+    def _parse_bulk_inventory_candidates(cls, text: str) -> tuple[list[BulkInventoryCandidate], list[str]]:
+        candidates: list[BulkInventoryCandidate] = []
+        skipped_lines: list[str] = []
+        current_category = "general"
+        headings = {
+            "fresh produce": "produce",
+            "protein": "protein",
+            "staples": "staples",
+            "sauces & pantry": "pantry",
+            "sauces and pantry": "pantry",
+            "extras": "extras",
+            "snacks / drinks": "snacks",
+            "snacks and drinks": "snacks",
+            "snacks/drinks": "snacks",
+        }
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            lowered = line.lower()
+            if lowered.startswith("add these into inventory") or lowered.startswith("add all these items into inventory"):
+                continue
+            category = headings.get(lowered)
+            if category is not None:
+                current_category = category
+                continue
+
+            if cls._is_ambiguous_inventory_line(line):
+                skipped_lines.append(line)
+                continue
+
+            name = re.sub(r"\s*\([^)]*\)", "", line).strip(" .,:;-").lower()
+            if not name:
+                continue
+            candidates.append(
+                BulkInventoryCandidate(
+                    name=name,
+                    quantity=1.0,
+                    unit=cls._infer_inventory_unit(name=name, category=current_category),
+                    category=current_category,
+                    source_line=line,
+                )
+            )
+
+        unique: dict[str, BulkInventoryCandidate] = {}
+        for candidate in candidates:
+            unique.setdefault(candidate.name, candidate)
+        return list(unique.values()), skipped_lines
+
+    @staticmethod
+    def _is_ambiguous_inventory_line(line: str) -> bool:
+        lowered = line.lower()
+        if " or " in lowered:
+            return True
+        if " / " in lowered:
+            return True
+        return False
+
+    @staticmethod
+    def _infer_inventory_unit(*, name: str, category: str) -> str:
+        lowered = name.lower()
+        if "egg" in lowered:
+            return "pcs"
+        if "soy sauce" in lowered or "oyster sauce" in lowered or "vinegar" in lowered or "oil" in lowered or "wine" in lowered:
+            return "bottle"
+        if "rice" in lowered:
+            return "pack"
+        if any(token in lowered for token in ("noodle", "wrapper", "mantou", "bao", "biscuit", "instant noodle")):
+            return "pack"
+        if any(token in lowered for token in ("peppercorn", "cornstarch", "five spice", "seaweed", "mushroom")):
+            return "pack"
+        if any(token in lowered for token in ("xiao bai cai", "gai lan", "chye sim", "spring onion")):
+            return "bunch"
+        if category == "produce" and any(token in lowered for token in ("garlic", "ginger", "chilli", "chillies")):
+            return "pack"
+        if any(token in lowered for token in ("cabbage", "tofu", "fish", "chicken", "pork", "prawn", "sausage", "apple", "orange", "soy milk", "tea")):
+            return "pack"
+        return "pack"
+
+    @staticmethod
+    def _is_bulk_inventory_request(text: str) -> bool:
+        lowered = text.lower()
+        line_count = len([line for line in text.splitlines() if line.strip()])
+        return "inventory" in lowered and "add" in lowered and line_count >= 4
+
+    @classmethod
+    def _is_bulk_inventory_follow_up(cls, text: str) -> bool:
+        lowered = text.strip().lower()
+        if lowered in {"yes", "y", "yeah", "yep", "ok", "okay", "sure", "confirm"}:
+            return True
+        return any(
+            phrase in lowered
+            for phrase in (
+                "sensible way",
+                "reasonable quantity",
+                "reasonable unit",
+                "add this into the list",
+                "add this into inventory",
+            )
+        )
+
+    def _store_pending_bulk_inventory_context(
+        self,
+        user_id: str,
+        candidates: list[BulkInventoryCandidate],
+        skipped_lines: list[str],
+    ) -> None:
+        self.conversation_manager.store.set_temporary_state(
+            user_id,
+            state=self._PENDING_BULK_INVENTORY_STATE,
+            value="pending",
+            expires_at=utc_now() + timedelta(hours=2),
+            note=json.dumps(
+                {
+                    "candidates": [asdict(candidate) for candidate in candidates],
+                    "skipped_lines": skipped_lines,
+                }
+            ),
+        )
+
+    def _load_pending_bulk_inventory_context(self, user_id: str) -> BulkInventoryPendingContext | None:
+        for state in self.conversation_manager.store.temporary_states(user_id):
+            if state.state != self._PENDING_BULK_INVENTORY_STATE:
+                continue
+            try:
+                payload = json.loads(state.note or "{}")
+            except Exception:
+                return None
+            raw_candidates = payload.get("candidates")
+            if not isinstance(raw_candidates, list):
+                return None
+            candidates = [
+                BulkInventoryCandidate(**candidate)
+                for candidate in raw_candidates
+                if isinstance(candidate, dict)
+            ]
+            skipped_lines = payload.get("skipped_lines")
+            return {
+                "candidates": candidates,
+                "skipped_lines": skipped_lines if isinstance(skipped_lines, list) else [],
+            }
+        return None
+
+    def _clear_pending_bulk_inventory_context(self, user_id: str) -> None:
+        self.conversation_manager.store.clear_temporary_state(user_id, self._PENDING_BULK_INVENTORY_STATE)
 
     def _verify_secret(self, secret_token: str | None) -> None:
         expected = self.settings.telegram_webhook_secret
@@ -598,7 +849,15 @@ class TelegramService:
             id=selected.id,
             name=selected.name,
             description=selected.description,
-            ingredients=[ingredient.model_dump(mode="json") for ingredient in selected.ingredients],
+            ingredients=[
+                RecipeIngredientInput(
+                    name=ingredient.name,
+                    quantity=ingredient.quantity,
+                    unit=ingredient.unit,
+                    optional=ingredient.optional,
+                )
+                for ingredient in selected.ingredients
+            ],
             instructions=selected.instructions,
             tags=selected.tags,
             calories=selected.calories,
@@ -620,7 +879,7 @@ class TelegramService:
             arguments={"recipe": recipe_payload},
             summary=summary,
         )
-        pending = confirmation["pending_action"]
+        pending: PendingConfirmationPayload = confirmation["pending_action"]
         self.debug_log.record(
             service="telegram",
             direction="internal",
@@ -666,7 +925,7 @@ class TelegramService:
 
         if intent == "cancel":
             result = self.mcp_tool_service.cancel_pending_action(confirmation_id, user_id=user_id)
-            pending_action = result.get("pending_action") or {}
+            pending_action = result["pending_action"]
             self.debug_log.record(
                 service="telegram",
                 direction="internal",
@@ -683,7 +942,7 @@ class TelegramService:
             return f"Okay, I cancelled: {str(pending_action.get('summary') or 'pending action')}."
 
         result = self.mcp_tool_service.confirm_pending_action(confirmation_id, user_id=user_id)
-        pending_action = result.get("pending_action") or {}
+        pending_action = result["pending_action"]
         confirmed_result = result.get("result") or {}
         self.debug_log.record(
             service="telegram",
@@ -888,7 +1147,7 @@ class TelegramService:
             )
             raise RuntimeError(str(exc)) from exc
 
-    async def _generate_llm_reply_async(self, user_id: str, text: str) -> str:
+    async def _generate_llm_reply_async(self, user_id: str, text: str) -> LLMReplyResult:
         conversation_context = self.conversation_manager.build_prompt_context(user_id)
         self.debug_log.record(
             service="telegram",
@@ -898,7 +1157,7 @@ class TelegramService:
             metadata={"user_id": user_id},
         )
         return await asyncio.to_thread(
-            self.llm_service.generate_reply,
+            self.llm_service.generate_reply_result,
             user_id=user_id,
             user_message=text,
             conversation_context=conversation_context,
@@ -910,7 +1169,7 @@ class TelegramService:
         user_id: str,
         text: str,
         draft_callback: Callable[[str], Awaitable[None]],
-    ) -> str:
+    ) -> LLMReplyResult:
         conversation_context = self.conversation_manager.build_prompt_context(user_id)
         self.debug_log.record(
             service="telegram",
@@ -931,7 +1190,7 @@ class TelegramService:
             )
 
         reply = await asyncio.to_thread(
-            self.llm_service.generate_reply_streaming,
+            self.llm_service.generate_reply_streaming_result,
             user_id=user_id,
             user_message=text,
             conversation_context=conversation_context,
@@ -954,7 +1213,7 @@ class TelegramService:
         text: str,
         fallback_reply: str | None = None,
         draft_callback: Callable[[str], Awaitable[None]] | None = None,
-    ) -> str:
+    ) -> LLMReplyResult:
         try:
             if draft_callback is not None:
                 return await self._generate_llm_reply_streaming_async(
@@ -982,17 +1241,19 @@ class TelegramService:
             elif "invalid json" in lowered or "unterminated string" in lowered or "malformed" in lowered:
                 reason = "the recipe search response was malformed"
             if self.llm_service.is_explicit_online_recipe_request(text):
-                return (
+                return LLMReplyResult(text=(
                     f"I couldn’t search online recipes right now because {reason}. "
                     "I have not imported anything from the web. "
                     "I can still suggest meals from your saved recipes and current inventory."
-                )
+                ))
             if fallback_reply:
-                return f"{fallback_reply}\n\nNote: richer LLM replies are currently unavailable because {reason}."
-            return (
+                return LLMReplyResult(
+                    text=f"{fallback_reply}\n\nNote: richer LLM replies are currently unavailable because {reason}."
+                )
+            return LLMReplyResult(text=(
                 f"I received your message, but {reason}, so I could not generate a richer reply. "
                 "Basic fridge commands still work: /inventory, /recipes, /utilities, /heartbeat."
-            )
+            ))
 
     async def _orchestrator_result_async(self, *, user_id: str, message: str) -> dict[str, object]:
         return await asyncio.to_thread(
@@ -1005,13 +1266,14 @@ class TelegramService:
         self,
         *,
         chat_id: str,
-        draft_id: int,
-    ) -> Callable[[str], Awaitable[None]]:
+    ) -> tuple[Callable[[str], Awaitable[None]], Callable[[], bool]]:
         last_text = ""
         last_sent_at = 0.0
+        message_id: int | None = None
+        streamed = False
 
         async def send_draft(text: str) -> None:
-            nonlocal last_text, last_sent_at
+            nonlocal last_text, last_sent_at, message_id, streamed
             if not text or self._draft_streaming_supported is False:
                 return
 
@@ -1021,29 +1283,48 @@ class TelegramService:
             force_send = normalized.startswith("Finalizing")
             if normalized == last_text:
                 return
-            if not force_send and last_text and now - last_sent_at < 0.35:
+            if not force_send and message_id is None and last_text and now - last_sent_at < 0.35:
                 return
 
             try:
-                await self.send_message_draft_async(
-                    chat_id=chat_id,
-                    draft_id=draft_id,
-                    text=normalized,
-                )
+                if message_id is None:
+                    response = await self._send_message_chunk_async(chat_id=chat_id, text=normalized)
+                    result = response.get("result")
+                    if isinstance(result, dict):
+                        raw_message_id = result.get("message_id")
+                        if isinstance(raw_message_id, int):
+                            message_id = raw_message_id
+                elif normalized != last_text:
+                    await self.edit_message_text_async(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=normalized,
+                    )
                 last_text = normalized
                 last_sent_at = now
+                streamed = message_id is not None
                 self._draft_streaming_supported = True
             except RuntimeError as exc:
+                lowered_error = str(exc).lower()
+                if "message is not modified" in lowered_error:
+                    # Telegram returns 400 if an edit repeats the current message text.
+                    # Treat that as a successful no-op so we do not strand the chat on
+                    # an earlier placeholder like "Finalizing reply...".
+                    last_text = normalized
+                    last_sent_at = now
+                    streamed = message_id is not None
+                    self._draft_streaming_supported = True
+                    return
                 self._draft_streaming_supported = False
                 self.debug_log.record(
                     service="telegram",
                     direction="internal",
                     status="fallback",
-                    summary="Telegram draft streaming unavailable; falling back to sendMessage.",
+                    summary="Telegram message edit streaming unavailable; falling back to sendMessage.",
                     metadata={"chat_id": chat_id, "error": str(exc)},
                 )
 
-        return send_draft
+        return send_draft, (lambda: streamed)
 
     @staticmethod
     def _normalize_chat_id(chat_id: str | int) -> str | int:
@@ -1071,6 +1352,53 @@ class TelegramService:
             "cancel",
         )
         return any(verb in lowered for verb in mutation_verbs)
+
+    def _guard_inventory_mutation_reply(
+        self,
+        *,
+        text: str,
+        reply_result: LLMReplyResult,
+        conversation_context: str,
+    ) -> str:
+        if not self._looks_like_inventory_mutation_request(text=text, conversation_context=conversation_context):
+            return reply_result.text
+        if self._has_inventory_write_result(reply_result.tool_results):
+            return reply_result.text
+        return (
+            "I have not updated inventory yet.\n"
+            "I need to execute inventory write tools before I can confirm anything was added.\n"
+            "Please resend the items with quantities, or ask me to try adding the list again."
+        )
+
+    @staticmethod
+    def _has_inventory_write_result(tool_results: list[dict[str, object]]) -> bool:
+        inventory_write_tools = {"add_inventory_item", "remove_inventory_item", "clear_inventory"}
+        for result in tool_results:
+            tool_name = str(result.get("tool_name") or "")
+            if tool_name in inventory_write_tools:
+                return True
+            if tool_name == "confirm_pending_action":
+                pending_action = result.get("pending_action")
+                if isinstance(pending_action, dict) and str(pending_action.get("action") or "") in inventory_write_tools:
+                    return True
+        return False
+
+    @staticmethod
+    def _looks_like_inventory_mutation_request(*, text: str, conversation_context: str) -> bool:
+        lowered = text.strip().lower()
+        mutation_verbs = ("add", "update", "remove", "delete", "clear", "restock", "put")
+        inventory_nouns = ("inventory", "fridge", "stock", "items")
+        if any(verb in lowered for verb in mutation_verbs) and any(noun in lowered for noun in inventory_nouns):
+            return True
+        if lowered in {"yes", "y", "yeah", "yep", "ok", "okay", "sure", "confirm"}:
+            context = conversation_context.lower()
+            if "inventory" in context and any(verb in context for verb in ("add", "update", "remove", "delete", "clear")):
+                return True
+        if lowered.startswith("yes ") or lowered.startswith("okay ") or lowered.startswith("ok "):
+            context = conversation_context.lower()
+            if "inventory" in context and any(verb in context for verb in ("add", "update", "remove", "delete", "clear")):
+                return True
+        return False
 
     @staticmethod
     def _should_use_llm_first(*, text: str, translated: str) -> bool:

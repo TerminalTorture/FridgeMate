@@ -141,6 +141,8 @@ class UserPreferences(BaseModel):
     max_prep_minutes: int = 10
     notification_frequency: str = "normal"
     dietary_preferences: list[str] = Field(default_factory=list)
+    essentials_items: list[str] = Field(default_factory=lambda: ["milk", "eggs", "rice", "pasta"])
+    dairy_items: list[str] = Field(default_factory=lambda: ["milk", "yogurt", "cheese", "butter", "cream"])
     search_model: str = DEFAULT_SEARCH_MODEL
 
 

@@ -444,6 +444,12 @@ class MCPToolService:
             dietary_preferences = arguments.get("dietary_preferences")
             if dietary_preferences is not None and not isinstance(dietary_preferences, list):
                 raise ValueError("dietary_preferences must be a list of strings.")
+            essentials_items = arguments.get("essentials_items")
+            if essentials_items is not None and not isinstance(essentials_items, list):
+                raise ValueError("essentials_items must be a list of strings.")
+            dairy_items = arguments.get("dairy_items")
+            if dairy_items is not None and not isinstance(dairy_items, list):
+                raise ValueError("dairy_items must be a list of strings.")
             search_model = str(arguments.get("search_model") or "").strip() or None
             if search_model is not None and not is_valid_search_model(search_model):
                 raise ValueError(
@@ -459,6 +465,8 @@ class MCPToolService:
                 max_prep_minutes=self._coerce_int(arguments.get("max_prep_minutes")) if arguments.get("max_prep_minutes") not in (None, "") else None,
                 notification_frequency=str(arguments.get("notification_frequency") or "").strip() or None,
                 dietary_preferences=[str(value) for value in dietary_preferences] if isinstance(dietary_preferences, list) else None,
+                essentials_items=[str(value) for value in essentials_items] if isinstance(essentials_items, list) else None,
+                dairy_items=[str(value) for value in dairy_items] if isinstance(dairy_items, list) else None,
                 search_model=search_model,
             )
             return {"tool_name": tool_name, **preferences.model_dump(mode="json")}
@@ -597,7 +605,7 @@ class MCPToolService:
             ("get_decision_state", "Read the public steering state: preferences, temporary states, session status, and recent interventions.", {"user_id": "string"}, "read", "Need current user steering state before deciding whether to intervene.", "Need hidden learned profile internals.", "DecisionEngine public state"),
             ("run_decision", "Run the adaptive decision engine once for a user without sending a Telegram message.", {"user_id": "string", "force": "string"}, "read", "Need to preview the current best intervention.", "Need to actually notify a user.", "DecisionEngine"),
             ("get_user_preferences", "Read the user-editable preference layer, including the per-user recipe search model.", {"user_id": "string"}, "read", "Need explicit preferences like mode, windows, effort, dietary settings, or recipe search model.", "Need learned hidden profile values.", "UserPreferences"),
-            ("set_user_preferences", f"Update the user-editable preference layer, including search_model. Allowed search_model values: {', '.join(ALLOWED_SEARCH_MODELS)}.", {"user_id": "string", "mode": "string", "meal_window_start": "string", "meal_window_end": "string", "late_night_window_start": "string", "late_night_window_end": "string", "max_prep_minutes": "integer", "notification_frequency": "string", "dietary_preferences": "array", "search_model": "string"}, "write", "User explicitly changes preference settings.", "Need temporary one-off context; use set_user_state.", "UserPreferences"),
+            ("set_user_preferences", f"Update the user-editable preference layer, including search_model. Allowed search_model values: {', '.join(ALLOWED_SEARCH_MODELS)}.", {"user_id": "string", "mode": "string", "meal_window_start": "string", "meal_window_end": "string", "late_night_window_start": "string", "late_night_window_end": "string", "max_prep_minutes": "integer", "notification_frequency": "string", "dietary_preferences": "array", "essentials_items": "array", "dairy_items": "array", "search_model": "string"}, "write", "User explicitly changes preference settings.", "Need temporary one-off context; use set_user_state.", "UserPreferences"),
             ("get_user_state", "Read active temporary state overrides for a user.", {"user_id": "string"}, "read", "Need the current temporary context like tired, commuting, or not_home.", "Need persistent preferences.", "TemporaryStateOverride"),
             ("set_user_state", "Set a temporary state override for a user.", {"user_id": "string", "state": "string", "duration_hours": "integer", "value": "string", "note": "string"}, "write", "User gives short-term context like being tired or not home.", "Need durable preferences.", "TemporaryStateOverride"),
             ("record_decision_feedback", "Record feedback for an assistant intervention.", {"user_id": "string", "intervention_id": "string", "thread_key": "string", "status": "string", "detail": "string"}, "write", "Need to learn from a user's response to a nudge.", "No intervention exists to update.", "DecisionEngine"),
@@ -692,6 +700,14 @@ class MCPToolService:
                 "max_prep_minutes": {"type": "integer"},
                 "notification_frequency": {"type": "string"},
                 "dietary_preferences": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "essentials_items": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "dairy_items": {
                     "type": "array",
                     "items": {"type": "string"},
                 },

@@ -10,3 +10,6 @@ data/runtime_logs.json
 tmp_logs.json
 .logs/
 data/traces/
+memory/long_term.md
+memory/recall_index.json
+memory/daily/

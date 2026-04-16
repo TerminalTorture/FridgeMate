@@ -276,6 +276,8 @@ class UserPreferenceRow(Base):
     max_prep_minutes: Mapped[int] = mapped_column(Integer, default=10)
     notification_frequency: Mapped[str] = mapped_column(String(20), default="normal")
     dietary_preferences: Mapped[list[str]] = mapped_column(JSON, default=list)
+    essentials_items: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["milk", "eggs", "rice", "pasta"])
+    dairy_items: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["milk", "yogurt", "cheese", "butter", "cream"])
     search_model: Mapped[str] = mapped_column(String(50), default=DEFAULT_SEARCH_MODEL)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 

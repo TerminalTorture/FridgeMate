@@ -3,16 +3,17 @@
     "README.md",
     "app/**",
     "memory/**",
-    "data/runtime_logs.json"
+    "data/runtime_logs.json",
+    "data/fridge_memory.json"
   ],
   "read_write": [
     "app/core/**",
     "tests/**",
-    "data/fridge_memory.json",
     "heartbeat.md",
     "identity.md",
     "soul.md",
-    "user.md"
+    "user.md",
+    "memory/long_term.md"
   ],
   "terminal": {
     "enabled": true,

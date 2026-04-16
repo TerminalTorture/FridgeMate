@@ -475,6 +475,9 @@ class SQLRepository:
             if not is_valid_search_model(search_model):
                 raise ValueError("search_model is not supported.")
             kwargs["search_model"] = search_model
+        for field in ("dietary_preferences", "essentials_items", "dairy_items"):
+            if field in kwargs and kwargs[field] is not None:
+                kwargs[field] = self._normalize_string_list(kwargs[field])
         with self.session() as session:
             row = session.scalar(select(UserPreferenceRow).where(UserPreferenceRow.user_id == str(user_id)))
             if row is None:
@@ -489,6 +492,8 @@ class SQLRepository:
                     max_prep_minutes=defaults.max_prep_minutes,
                     notification_frequency=defaults.notification_frequency,
                     dietary_preferences=list(defaults.dietary_preferences),
+                    essentials_items=list(defaults.essentials_items),
+                    dairy_items=list(defaults.dairy_items),
                     search_model=defaults.search_model,
                     updated_at=utc_now(),
                 )
@@ -501,6 +506,8 @@ class SQLRepository:
                 "max_prep_minutes",
                 "notification_frequency",
                 "dietary_preferences",
+                "essentials_items",
+                "dairy_items",
                 "search_model",
             ):
                 if field in kwargs and kwargs[field] is not None:
@@ -1014,6 +1021,23 @@ class SQLRepository:
         }
 
     @staticmethod
+    def _normalize_string_list(raw: object) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for value in raw:
+            text = str(value).strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+        return normalized
+
+    @staticmethod
     def _heartbeat_defaults(*, user_id: str) -> dict[str, object]:
         return {
             "user_id": str(user_id),
@@ -1045,6 +1069,8 @@ class SQLRepository:
             max_prep_minutes=row.max_prep_minutes,
             notification_frequency=row.notification_frequency,
             dietary_preferences=list(row.dietary_preferences or []),
+            essentials_items=list(row.essentials_items or []),
+            dairy_items=list(row.dairy_items or []),
             search_model=row.search_model or DEFAULT_SEARCH_MODEL,
         )
 

@@ -155,6 +155,8 @@ class UserPreferencesRequest(BaseModel):
     max_prep_minutes: int | None = Field(default=None, ge=1, le=240)
     notification_frequency: str | None = None
     dietary_preferences: list[str] | None = None
+    essentials_items: list[str] | None = None
+    dairy_items: list[str] | None = None
     search_model: str | None = None
 
 

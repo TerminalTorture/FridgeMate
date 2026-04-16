@@ -3,10 +3,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import RLock
-from typing import Callable
+from typing import Callable, NotRequired, TypedDict
 from uuid import uuid4
 
 from app.core.time_utils import utc_now
+
+
+class PendingConfirmationPayload(TypedDict):
+    confirmation_id: str
+    user_id: str
+    action: str
+    arguments: dict[str, object]
+    summary: str
+    created_at: str
+    expires_at: str
+
+
+class ConfirmationRequestResult(TypedDict):
+    requires_confirmation: bool
+    message: str
+    pending_action: PendingConfirmationPayload
+
+
+class ConfirmationResolutionResult(TypedDict):
+    pending_action: PendingConfirmationPayload
+    confirmed: NotRequired[bool]
+    cancelled: NotRequired[bool]
+    result: NotRequired[dict[str, object]]
 
 
 @dataclass
@@ -19,7 +42,7 @@ class PendingConfirmation:
     created_at: datetime
     expires_at: datetime
 
-    def model_dump(self) -> dict[str, object]:
+    def model_dump(self) -> PendingConfirmationPayload:
         return {
             "confirmation_id": self.confirmation_id,
             "user_id": self.user_id,
@@ -44,7 +67,7 @@ class ConfirmationManager:
         action: str,
         arguments: dict[str, object],
         summary: str,
-    ) -> dict[str, object]:
+    ) -> ConfirmationRequestResult:
         self._prune_expired()
         now = utc_now()
         confirmation = PendingConfirmation(
@@ -72,7 +95,7 @@ class ConfirmationManager:
         self,
         confirmation_id: str,
         executor: Callable[[PendingConfirmation], dict[str, object]],
-    ) -> dict[str, object]:
+    ) -> ConfirmationResolutionResult:
         self._prune_expired()
         with self._lock:
             confirmation = self._pending.pop(confirmation_id, None)
@@ -85,7 +108,7 @@ class ConfirmationManager:
             "result": result,
         }
 
-    def cancel(self, confirmation_id: str) -> dict[str, object]:
+    def cancel(self, confirmation_id: str) -> ConfirmationResolutionResult:
         self._prune_expired()
         with self._lock:
             confirmation = self._pending.pop(confirmation_id, None)
@@ -96,7 +119,7 @@ class ConfirmationManager:
             "pending_action": confirmation.model_dump(),
         }
 
-    def pending_actions(self, user_id: str | None = None) -> list[dict[str, object]]:
+    def pending_actions(self, user_id: str | None = None) -> list[PendingConfirmationPayload]:
         self._prune_expired()
         with self._lock:
             actions = list(self._pending.values())

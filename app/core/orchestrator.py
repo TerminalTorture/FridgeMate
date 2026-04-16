@@ -87,9 +87,9 @@ class MCPFridgeOrchestrator:
             inventory = self.inventory_agent.get_inventory()
             expiring = self.inventory_agent.expiring_soon(days=3)
             lines = ["Current inventory:"]
-            for item in inventory:
+            for index, item in enumerate(inventory, start=1):
                 expiry_text = f", expires {item.expires_on.isoformat()}" if item.expires_on else ""
-                lines.append(f"- {item.name}: {item.quantity:g} {item.unit}{expiry_text}")
+                lines.append(f"{index}. {item.name} {item.quantity:g} {item.unit}{expiry_text}")
             if expiring:
                 lines.append(
                     "Expiring soon: "

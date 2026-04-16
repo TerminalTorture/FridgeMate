@@ -75,6 +75,82 @@
         "ready-to-cook"
       ],
       "summary": "Sent decision heartbeat to 460723160: bananas, broccoli, chicken breast need to be used soon. I do not have a clean ready-to-cook match right now."
+    },
+    {
+      "timestamp": "2026-04-16T07:13:05.904442+00:00",
+      "category": "heartbeat",
+      "keywords": [
+        "460723160",
+        "bananas",
+        "breast",
+        "broccoli",
+        "chicken",
+        "clean",
+        "decision",
+        "have",
+        "heartbeat",
+        "match",
+        "need",
+        "ready-to-cook"
+      ],
+      "summary": "Sent decision heartbeat to 460723160: bananas, broccoli, chicken breast need to be used soon. I do not have a clean ready-to-cook match right now."
+    },
+    {
+      "timestamp": "2026-04-16T08:45:28.573945+00:00",
+      "category": "heartbeat",
+      "keywords": [
+        "460723160",
+        "bananas",
+        "breast",
+        "broccoli",
+        "chicken",
+        "clean",
+        "decision",
+        "have",
+        "heartbeat",
+        "match",
+        "need",
+        "ready-to-cook"
+      ],
+      "summary": "Sent decision heartbeat to 460723160: bananas, broccoli, chicken breast need to be used soon. I do not have a clean ready-to-cook match right now."
+    },
+    {
+      "timestamp": "2026-04-16T10:18:13.640762+00:00",
+      "category": "heartbeat",
+      "keywords": [
+        "460723160",
+        "available",
+        "bananas",
+        "breast",
+        "broccoli",
+        "chicken",
+        "cucumber",
+        "decision",
+        "eggs",
+        "expiring",
+        "heartbeat",
+        "items"
+      ],
+      "summary": "Sent decision heartbeat to 460723160: Use the expiring items soon: bananas, broccoli, chicken breast, cucumber, eggs, lettuce, milk, onion, spinach, tomatoes, and yogurt.\nNo ready-to-cook recipe match is available right now."
+    },
+    {
+      "timestamp": "2026-04-16T11:48:30.572118+00:00",
+      "category": "heartbeat",
+      "keywords": [
+        "460723160",
+        "bananas",
+        "breast",
+        "broccoli",
+        "chicken",
+        "decision",
+        "don\u2019t",
+        "have",
+        "heartbeat",
+        "match",
+        "ready-to-cook",
+        "right"
+      ],
+      "summary": "Sent decision heartbeat to 460723160: Use bananas, broccoli, and chicken breast soon. I don\u2019t have a ready-to-cook match right now."
     }
   ]
 }

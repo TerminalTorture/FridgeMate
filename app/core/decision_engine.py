@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from datetime import datetime, time, timedelta
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from app.agents.behaviour import BehaviourAgent
@@ -13,20 +16,57 @@ from app.core.conversation_manager import ConversationManager
 from app.core.override_parser import OverrideParser
 from app.core.time_utils import ensure_utc, get_timezone, singapore_now, utc_now
 from app.core.tracing import add_event, record_decision_rule
+from app.models.api import RecipeSuggestion
 from app.models.domain import (
     AssistantIntervention,
     DecisionProfile,
     DecisionResult,
     GroceryLine,
+    InventoryItem,
     OverrideIntent,
+    Recipe,
+    SharedContext,
     TemporaryStateOverride,
     UserPreferences,
 )
 
 
+class CandidateMetadata(TypedDict, total=False):
+    expiring_items: list[str]
+    urgent: bool
+
+
+class InterventionCandidate(TypedDict):
+    intervention_type: str
+    score: float
+    confidence: float
+    reason_codes: list[str]
+    thread_key: str
+    recommended_action: str
+    recipe_id: str | None
+    recipe_name: str | None
+    draft_items: list[GroceryLine]
+    metadata: CandidateMetadata
+
+
+class DecisionContext(TypedDict):
+    user_id: str
+    snapshot: SharedContext
+    preferences: UserPreferences
+    states: list[TemporaryStateOverride]
+    state_map: dict[str, TemporaryStateOverride]
+    profile: DecisionProfile
+    heartbeat: dict[str, object]
+    now: datetime
+    recipes: dict[str, Recipe]
+    suggestions: list[RecipeSuggestion]
+    low_stock: list[InventoryItem]
+    expiring: list[InventoryItem]
+    quick_mode: bool
+    effective_prep_minutes: int
+
+
 class DecisionEngine:
-    ESSENTIALS = {"milk", "eggs", "rice", "pasta"}
-    DAIRY_ITEMS = {"milk", "yogurt", "cheese", "butter", "cream"}
     RESOLVED_STATUSES = {"completed", "dismissed"}
 
     def __init__(
@@ -47,8 +87,10 @@ class DecisionEngine:
         self.behaviour_agent = behaviour_agent
         self.conversation_manager = conversation_manager
         self.override_parser = override_parser or OverrideParser()
+        self.llm_service: Any | None = None
 
     def bind_llm_service(self, llm_service) -> None:
+        self.llm_service = llm_service
         self.override_parser.bind_llm_service(llm_service)
 
     def parse_override_intent(self, text: str) -> OverrideIntent | None:
@@ -139,8 +181,11 @@ class DecisionEngine:
                 message="No proactive nudge is worth sending right now.",
             )
 
-        best = max(candidates, key=lambda candidate: (candidate["score"], candidate["confidence"]))
-        thread_key = str(best["thread_key"])
+        best = self._llm_select_candidate(context, candidates) or max(
+            candidates,
+            key=lambda candidate: (candidate["score"], candidate["confidence"]),
+        )
+        thread_key = best["thread_key"]
         latest = self.store.latest_assistant_intervention(user_id, thread_key)
         sequence_index = self._next_sequence_index(best, latest)
         context_hash = self._build_context_hash(best)
@@ -154,30 +199,30 @@ class DecisionEngine:
             return DecisionResult(
                 user_id=user_id,
                 intervene=False,
-                confidence=float(best["confidence"]),
-                intervention_type=str(best["intervention_type"]),
-                score=float(best["score"]),
+                confidence=best["confidence"],
+                intervention_type=best["intervention_type"],
+                score=best["score"],
                 reason_codes=[*best["reason_codes"], "thread_muted"],
                 thread_key=thread_key,
                 recommended_action="suppress",
                 message="That issue is muted for now.",
                 context_hash=context_hash,
                 sequence_index=sequence_index,
-                metadata=dict(best.get("metadata") or {}),
+                metadata=dict(best["metadata"]),
             )
 
         cooldown_active = self._cooldown_active(latest, context, context_hash)
         threshold = self._threshold(context)
-        intervene = (float(best["score"]) >= threshold and float(best["confidence"]) >= 0.45 and not cooldown_active) or force
+        intervene = (best["score"] >= threshold and best["confidence"] >= 0.45 and not cooldown_active) or force
         record_decision_rule(
             rule="threshold_check",
-            triggered=float(best["score"]) >= threshold,
-            detail={"score": float(best["score"]), "threshold": threshold},
+            triggered=best["score"] >= threshold,
+            detail={"score": best["score"], "threshold": threshold},
         )
         record_decision_rule(
             rule="confidence_check",
-            triggered=float(best["confidence"]) >= 0.45,
-            detail={"confidence": float(best["confidence"]), "threshold": 0.45},
+            triggered=best["confidence"] >= 0.45,
+            detail={"confidence": best["confidence"], "threshold": 0.45},
         )
         record_decision_rule(
             rule="cooldown_block",
@@ -193,29 +238,29 @@ class DecisionEngine:
                 detail={"urgent": bool(best["metadata"].get("urgent"))},
             )
 
-        message = self._format_message(best, context, sequence_index)
+        message = self._generate_message(best, context, sequence_index)
         reason_codes = list(best["reason_codes"])
         if cooldown_active:
             reason_codes.append("cooldown_active")
-        if float(best["score"]) < threshold and not force:
+        if best["score"] < threshold and not force:
             reason_codes.append("below_threshold")
 
         return DecisionResult(
             user_id=user_id,
             intervene=intervene,
-            confidence=round(float(best["confidence"]), 2),
-            intervention_type=str(best["intervention_type"]),
-            score=round(float(best["score"]), 2),
+            confidence=round(best["confidence"], 2),
+            intervention_type=best["intervention_type"],
+            score=round(best["score"], 2),
             reason_codes=reason_codes,
             thread_key=thread_key,
-            recommended_action=str(best["recommended_action"]),
+            recommended_action=best["recommended_action"],
             message=message,
-            draft_items=[item for item in best["draft_items"]],
-            recipe_id=best.get("recipe_id"),
-            recipe_name=best.get("recipe_name"),
+            draft_items=list(best["draft_items"]),
+            recipe_id=best["recipe_id"],
+            recipe_name=best["recipe_name"],
             context_hash=context_hash,
             sequence_index=sequence_index,
-            metadata=dict(best.get("metadata") or {}),
+            metadata=dict(best["metadata"]),
         )
 
     def materialize_intervention(self, result: DecisionResult) -> DecisionResult:
@@ -327,7 +372,7 @@ class DecisionEngine:
             self.store.set_decision_profile(user_id, **updates)
         return intervention
 
-    def _assemble_context(self, user_id: str, *, prefer_easier: bool) -> dict[str, object]:
+    def _assemble_context(self, user_id: str, *, prefer_easier: bool) -> DecisionContext:
         snapshot = self.store.snapshot()
         preferences = self.store.user_preferences(user_id)
         states = self.store.temporary_states(user_id)
@@ -364,8 +409,8 @@ class DecisionEngine:
             "effective_prep_minutes": effective_prep,
         }
 
-    def _candidate_interventions(self, context: dict[str, object]) -> list[dict[str, object]]:
-        candidates: list[dict[str, object]] = []
+    def _candidate_interventions(self, context: DecisionContext) -> list[InterventionCandidate]:
+        candidates: list[InterventionCandidate] = []
         expiring_candidate = self._expiring_candidate(context)
         if expiring_candidate:
             candidates.append(expiring_candidate)
@@ -380,7 +425,7 @@ class DecisionEngine:
             candidates.append(late_night_candidate)
         return candidates
 
-    def _cook_now_candidate(self, context: dict[str, object]) -> dict[str, object] | None:
+    def _cook_now_candidate(self, context: DecisionContext) -> InterventionCandidate | None:
         if self._has_state(context, "not_home"):
             return None
         if not self._in_window(context["now"], context["preferences"].meal_window_start, context["preferences"].meal_window_end):
@@ -407,7 +452,7 @@ class DecisionEngine:
             "metadata": {"expiring_items": expiring_hits, "urgent": bool(expiring_hits)},
         }
 
-    def _expiring_candidate(self, context: dict[str, object]) -> dict[str, object] | None:
+    def _expiring_candidate(self, context: DecisionContext) -> InterventionCandidate | None:
         expiring = context["expiring"]
         if not expiring or self._has_state(context, "not_home"):
             return None
@@ -440,10 +485,9 @@ class DecisionEngine:
             "metadata": {"expiring_items": expiring_hits, "urgent": True},
         }
 
-    def _pickup_candidate(self, context: dict[str, object]) -> dict[str, object] | None:
-        low_essentials = [
-            item for item in context["low_stock"] if item.name.lower() in self.ESSENTIALS
-        ]
+    def _pickup_candidate(self, context: DecisionContext) -> InterventionCandidate | None:
+        essentials = {value.lower() for value in context["preferences"].essentials_items}
+        low_essentials = [item for item in context["low_stock"] if item.name.lower() in essentials]
         if not low_essentials:
             return None
         if not (
@@ -476,7 +520,7 @@ class DecisionEngine:
             "metadata": {"urgent": len(lines) >= 2},
         }
 
-    def _late_night_candidate(self, context: dict[str, object]) -> dict[str, object] | None:
+    def _late_night_candidate(self, context: DecisionContext) -> InterventionCandidate | None:
         if self._has_state(context, "not_home"):
             return None
         if not self._in_window(
@@ -506,14 +550,14 @@ class DecisionEngine:
 
     def _best_recipe(
         self,
-        context: dict[str, object],
+        context: DecisionContext,
         *,
         require_ready: bool,
         prefer_expiring: bool,
         late_night: bool = False,
-    ):
+    ) -> tuple[Recipe, RecipeSuggestion, list[str]] | None:
         expiring_names = {item.name.lower() for item in context["expiring"]}
-        ranked: list[tuple[tuple[object, ...], object, object, list[str]]] = []
+        ranked: list[tuple[tuple[int | float, ...], Recipe, RecipeSuggestion, list[str]]] = []
         for suggestion in context["suggestions"]:
             recipe = context["recipes"].get(suggestion.recipe_id)
             if recipe is None:
@@ -545,7 +589,7 @@ class DecisionEngine:
         _, recipe, suggestion, expiring_hits = max(ranked, key=lambda item: item[0])
         return recipe, suggestion, expiring_hits
 
-    def _threshold(self, context: dict[str, object]) -> float:
+    def _threshold(self, context: DecisionContext) -> float:
         profile: DecisionProfile = context["profile"]
         preferences: UserPreferences = context["preferences"]
         threshold = profile.user_threshold
@@ -560,14 +604,14 @@ class DecisionEngine:
         return max(0.35, min(threshold, 0.95))
 
     @staticmethod
-    def _next_sequence_index(candidate: dict[str, object], latest: AssistantIntervention | None) -> int:
+    def _next_sequence_index(candidate: InterventionCandidate, latest: AssistantIntervention | None) -> int:
         if latest is None or latest.status in DecisionEngine.RESOLVED_STATUSES:
             return 1
         if latest.context_hash == DecisionEngine._build_context_hash(candidate):
             return min(latest.sequence_index + 1, 4)
         return 1
 
-    def _cooldown_active(self, latest: AssistantIntervention | None, context: dict[str, object], context_hash: str) -> bool:
+    def _cooldown_active(self, latest: AssistantIntervention | None, context: DecisionContext, context_hash: str) -> bool:
         if latest is None or latest.context_hash != context_hash:
             return False
         base_minutes = 90
@@ -577,7 +621,161 @@ class DecisionEngine:
             base_minutes = 45
         return (utc_now() - ensure_utc(latest.sent_at)) < timedelta(minutes=base_minutes)
 
-    def _format_message(self, candidate: dict[str, object], context: dict[str, object], sequence_index: int) -> str:
+    def _llm_select_candidate(
+        self,
+        context: DecisionContext,
+        candidates: list[InterventionCandidate],
+    ) -> InterventionCandidate | None:
+        if self.llm_service is None or not getattr(self.llm_service, "is_configured", lambda: False)():
+            return None
+        if not candidates:
+            return None
+        try:
+            registry = ""
+            if getattr(self.llm_service, "mcp_tool_service", None) is not None:
+                registry = str(self.llm_service.mcp_tool_service.prompt_tool_registry())
+            payload = {
+                "model": getattr(self.llm_service.settings, "llm_model", "gpt-5.1-mini"),
+                "temperature": 0.2,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Select exactly one intervention candidate as JSON with keys "
+                            "thread_key (string), confidence (0-1), rationale (string).\n"
+                            f"Current local time: {context['now'].isoformat()}\n"
+                            f"Mode: {context['preferences'].mode}\n"
+                            f"Notification frequency: {context['preferences'].notification_frequency}\n"
+                            f"Quick mode: {context['quick_mode']}\n"
+                            f"Candidates: {json.dumps([self._candidate_for_llm(item) for item in candidates], ensure_ascii=False)}\n"
+                            f"MCP registry (reference only):\n{registry}\n"
+                            "Return JSON only."
+                        ),
+                    }
+                ],
+            }
+            response = self.llm_service.create_response(payload)
+            parsed = self._extract_json_object(self._extract_response_text(response))
+            thread_key = str(parsed.get("thread_key") or "").strip()
+            if not thread_key:
+                return None
+            selected = next((candidate for candidate in candidates if candidate["thread_key"] == thread_key), None)
+            if selected is None:
+                return None
+            llm_conf = parsed.get("confidence")
+            if isinstance(llm_conf, (int, float)):
+                selected["confidence"] = self._clamp(float(llm_conf))
+            add_event(
+                name="decision_llm_candidate_selected",
+                detail={"thread_key": selected["thread_key"], "score": selected["score"], "confidence": selected["confidence"]},
+            )
+            return selected
+        except Exception as exc:
+            add_event(
+                name="decision_llm_candidate_fallback",
+                detail={"reason": str(exc)},
+            )
+            return None
+
+    def _generate_message(self, candidate: InterventionCandidate, context: DecisionContext, sequence_index: int) -> str:
+        fallback = self._format_message(candidate, context, sequence_index)
+        if self.llm_service is None or not getattr(self.llm_service, "is_configured", lambda: False)():
+            return fallback
+        try:
+            payload = {
+                "model": getattr(self.llm_service.settings, "llm_model", "gpt-5.1-mini"),
+                "temperature": 0.3,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Rewrite this intervention message in concise plain text for Telegram. "
+                            "Keep it factual, <= 3 lines, and avoid markdown.\n"
+                            f"Candidate: {json.dumps(self._candidate_for_llm(candidate), ensure_ascii=False)}\n"
+                            f"Sequence index: {sequence_index}\n"
+                            f"Current mode: {context['preferences'].mode}\n"
+                            f"Fallback message: {fallback}\n"
+                            "Return JSON only: {\"message\": \"...\"}."
+                        ),
+                    }
+                ],
+            }
+            response = self.llm_service.create_response(payload)
+            parsed = self._extract_json_object(self._extract_response_text(response))
+            generated = str(parsed.get("message") or "").strip()
+            sanitized = self._sanitize_message(generated)
+            if not sanitized:
+                return fallback
+            return sanitized
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _candidate_for_llm(candidate: InterventionCandidate) -> dict[str, object]:
+        return {
+            "thread_key": candidate["thread_key"],
+            "intervention_type": candidate["intervention_type"],
+            "score": candidate["score"],
+            "confidence": candidate["confidence"],
+            "recommended_action": candidate["recommended_action"],
+            "recipe_name": candidate["recipe_name"],
+            "reason_codes": candidate["reason_codes"],
+            "draft_items": [item.model_dump(mode="json") for item in candidate["draft_items"]],
+            "metadata": dict(candidate["metadata"]),
+        }
+
+    @staticmethod
+    def _extract_response_text(response_payload: dict[str, object]) -> str:
+        output_text = response_payload.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+        output = response_payload.get("output")
+        if isinstance(output, list):
+            texts: list[str] = []
+            for item in output:
+                if not isinstance(item, dict) or item.get("type") != "message":
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                        texts.append(str(part["text"]))
+            if texts:
+                return "\n".join(texts).strip()
+        raise RuntimeError("Decision LLM response did not contain output text.")
+
+    @staticmethod
+    def _extract_json_object(raw: str) -> dict[str, object]:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?", "", text).strip()
+            text = re.sub(r"```$", "", text).strip()
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"\{[\s\S]*\}", text)
+        if not match:
+            raise ValueError("No JSON object found in LLM response.")
+        parsed = json.loads(match.group(0))
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM JSON response is not an object.")
+        return parsed
+
+    @staticmethod
+    def _sanitize_message(text: str) -> str:
+        if not text:
+            return ""
+        cleaned = text.replace("*", "").replace("`", "").strip()
+        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        if not lines:
+            return ""
+        return "\n".join(lines[:3])[:400]
+
+    def _format_message(self, candidate: InterventionCandidate, context: DecisionContext, sequence_index: int) -> str:
         intervention_type = candidate["intervention_type"]
         recipe_name = candidate.get("recipe_name")
         if intervention_type == "cook_now":
@@ -631,7 +829,7 @@ class DecisionEngine:
         if not items:
             return 0
 
-        def mutator(state):
+        def mutator(state: SharedContext) -> dict[str, object]:
             existing = {(line.name.lower(), line.reason.lower()) for line in state.pending_grocery_list}
             added = 0
             for item in items:
@@ -766,7 +964,7 @@ class DecisionEngine:
         return "Updated."
 
     @staticmethod
-    def _build_context_hash(candidate: dict[str, object]) -> str:
+    def _build_context_hash(candidate: InterventionCandidate) -> str:
         raw = "|".join(
             [
                 str(candidate.get("intervention_type") or ""),
@@ -798,7 +996,7 @@ class DecisionEngine:
         return max(lower, min(value, upper))
 
     @staticmethod
-    def _has_state(context: dict[str, object], state_name: str) -> bool:
+    def _has_state(context: DecisionContext, state_name: str) -> bool:
         return state_name in context["state_map"]
 
     def _temporary_state_expiry(self, intent: OverrideIntent) -> datetime:
@@ -815,10 +1013,11 @@ class DecisionEngine:
         }.get(intent.target, 24)
         return now + timedelta(hours=hours)
 
-    def _dietary_blocked(self, recipe, preferences: UserPreferences) -> bool:
+    def _dietary_blocked(self, recipe: Recipe, preferences: UserPreferences) -> bool:
         lowered_prefs = {value.lower() for value in preferences.dietary_preferences}
         if "avoid dairy" in lowered_prefs or "no dairy" in lowered_prefs:
+            dairy_terms = {value.lower() for value in preferences.dairy_items}
             for ingredient in recipe.ingredients:
-                if ingredient.name.lower() in self.DAIRY_ITEMS:
+                if ingredient.name.lower() in dairy_terms:
                     return True
         return False

@@ -1,179 +1,207 @@
-# FridgeMate MCP Fridge Prototype
+# FridgeMate
 
-`FridgeMate` is a FastAPI-based household assistant with a SQL-first runtime store, batch-level fridge inventory, recipe matching, conversation memory, diagnostics, and a push-first decision engine for low-effort eating.
+FridgeMate is a FastAPI-based household assistant that helps you decide what to cook, what to buy, and when to act, using your fridge state plus adaptive behavior over time.
 
+It is built to work in real chat workflows (Telegram and HTTP) while remaining testable and observable like an engineering system.
 
+## Why FridgeMate Is Different
 
-## Persistence Model
+1. Multi-agent architecture with clear roles.
+   Inventory, recipe, grocery, nutrition, behavior, and utility concerns are split into dedicated agents and orchestrated through one runtime.
+2. SQL-first operational memory.
+   Inventory, meal history, sessions, diagnostics, user preferences, and runtime events are persisted in SQL rather than scattered ad hoc files.
+3. Deterministic historical seeding.
+   You can boot an empty database with realistic six-month synthetic behavior for demos, grading, and reproducible testing.
+4. Adaptive decision engine and heartbeat nudges.
+   The system can proactively check in around meal times and suggest low-effort actions based on temporary user states.
+5. Safer action workflow.
+   Destructive or irreversible actions are gated behind explicit confirmation IDs.
+6. Built-in observability.
+   Debug logs, diagnostics, runtime state snapshots, and optional trace files let you inspect what happened and why.
 
-FridgeMate separates prompt/bootstrap assets from operational data:
+## What You Can Do
 
-- Markdown bootstrap: assistant identity, tone, user profile, durable notes, daily memory
-- SQL runtime store: inventory, batches, recipes, meals, grocery orders, sessions, diagnostics, heartbeat preferences, runtime events
-- Legacy JSON path: `MEMORY_STORE_PATH` is only kept for one-time import compatibility
+- Track inventory with batch-level details and expiry pressure.
+- Suggest and cook recipes from available ingredients.
+- Search and import online recipes through the LLM-backed discovery service.
+- Generate grocery drafts and confirm orders.
+- Manage user preferences and temporary context states (for example, tired or not_home).
+- Run FridgeMate through HTTP, Telegram polling, or Telegram webhook mode.
 
-Main SQL tables:
+## Tech Stack
 
-- `inventory_items`
-- `inventory_batches`
-- `recipes`
-- `recipe_ingredients`
-- `meal_records`
-- `grocery_orders`
-- `grocery_order_lines`
-- `pending_grocery_items`
-- `conversation_sessions`
-- `conversation_turns`
-- `conversation_summaries`
-- `heartbeat_preferences`
-- `user_preferences`
-- `temporary_state_overrides`
-- `decision_profiles`
-- `assistant_interventions`
-- `diagnostics_snapshots`
-- `runtime_events`
+- Python 3.10+
+- FastAPI + Uvicorn
+- SQLAlchemy + Alembic
+- SQLite by default (portable to other SQL backends)
 
-## Setup
+---
 
-1. Install dependencies:
+## Quick Start (Local)
+
+### 1. Create and activate a virtual environment
+
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+macOS/Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 2. Install dependencies
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-2. Copy `.env.example` to `.env` and set your secrets.
-Minimumly, fill TELEGRAM_BOT_TOKEN,LLM_API_KEY,LLM_MODEL,LLM_BASE_URL
+### 3. Configure environment variables
 
-3. Create the schema:
+Copy `.env.example` to `.env`, then set at least:
+
+- `TELEGRAM_BOT_TOKEN`
+- `LLM_API_KEY`
+- `LLM_MODEL`
+
+`LLM_BASE_URL` is optional (useful for proxy or gateway setups).
+
+### 4. Initialize schema
 
 ```bash
 alembic upgrade head
 ```
 
-4. Optionally seed six months of history:
+### 5. Start the API
 
 ```bash
-python scripts/seed_history.py
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-5. Start the app:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Default SQL settings:
-
-```bash
-DATABASE_URL=sqlite:///data/fridgemate.db
-SQL_ECHO=0
-SEED_HISTORY_ON_STARTUP=1
-SEED_HISTORY_DAYS=180
-SEED_HISTORY_SEED=4052
-```
-
-`SEED_HISTORY_ON_STARTUP=1` means an empty database will auto-bootstrap with synthetic usage history. Set it to `0` if you want a minimal import-only startup.
-
-## Historical Data
-
-The synthetic history generator is deterministic. With the same `SEED_HISTORY_SEED`, you get the same purchase dates, expiry dates, meal cadence, low-stock events, and restock patterns.
-
-The seeded data is intended to look like a fridge used daily for months:
-
-- weekly milk purchases
-- eggs dropping below threshold and being restocked
-- vegetables bought in bursts
-- leftovers and expiry pressure
-- recurring recipes and meal logging
-- routine grocery orders and occasional misses
-
-You can reseed through the API too:
-
-```bash
-curl -X POST http://127.0.0.1:8000/seed/history \
-  -H "Content-Type: application/json" \
-  -d "{\"days\": 180, \"seed\": 4052}"
-```
-
-## Key API Checks
-
-Basic health and config:
+### 6. Smoke-check the system
 
 ```bash
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/config/status
+curl http://127.0.0.1:8000/debug/integrations
+```
+
+If these return valid JSON, the app is up and configured.
+
+---
+
+## Deployment Modes
+
+FridgeMate can run in three practical modes:
+
+1. API-only mode
+   - Condition: Telegram token not configured.
+   - Result: HTTP API works, no Telegram messaging worker.
+2. Telegram polling mode
+   - Condition: `TELEGRAM_BOT_TOKEN` is set and `TELEGRAM_CHAT_ID` is empty.
+   - Result: Background polling runner starts and consumes Telegram updates.
+3. Telegram webhook mode
+   - Condition: `TELEGRAM_BOT_TOKEN` is set and `TELEGRAM_CHAT_ID` is set.
+   - Result: App expects incoming webhook calls on `/telegram/webhook`.
+
+For webhook mode, also configure:
+
+- `TELEGRAM_WEBHOOK_SECRET`
+- `TELEGRAM_WEBHOOK_URL`
+
+Then register webhook:
+
+```bash
+python scripts/register_telegram_webhook.py
+```
+
+Check webhook status:
+
+```bash
+python scripts/check_telegram_webhook.py
+```
+
+---
+
+## Configuration Reference
+
+Key settings in `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_WEBHOOK_URL=
+
+LLM_API_KEY=
+LLM_MODEL=gpt-5.4-mini
+LLM_BASE_URL=
+
+DATABASE_URL=sqlite:///data/fridgemate.db
+SQL_ECHO=0
+
+SEED_HISTORY_ON_STARTUP=1
+SEED_HISTORY_DAYS=180
+SEED_HISTORY_SEED=4052
+
+LOG_STORE_PATH=data/runtime_logs.json
+TRACE_MODE=0
+TRACE_LOG_PATH=data/traces
+
+LLM_GATEWAY_POLICY_PATH=config/llm_gateway_policy.json
+```
+
+Notes:
+
+- `SEED_HISTORY_ON_STARTUP=1` means an empty database auto-seeds realistic historical usage.
+- `TRACE_MODE=1` enables per-request trace artifacts under `TRACE_LOG_PATH`.
+- `MEMORY_STORE_PATH` is kept for legacy compatibility and one-time import behavior.
+
+---
+
+## Core API Checkpoints
+
+### Health and configuration
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/config/status
+```
+
+### Runtime visibility
+
+```bash
+curl http://127.0.0.1:8000/debug/logs
+curl http://127.0.0.1:8000/debug/integrations
+curl http://127.0.0.1:8000/runtime/state
+curl http://127.0.0.1:8000/diagnostics
 curl http://127.0.0.1:8000/memory
 ```
 
-Inventory and batch visibility:
+### Inventory and recipes
 
 ```bash
 curl http://127.0.0.1:8000/inventory
 curl http://127.0.0.1:8000/inventory/batches
-curl -X POST http://127.0.0.1:8000/inventory/items \
-  -H "Content-Type: application/json" \
-  -d "{\"id\":\"milk_demo\",\"name\":\"Milk\",\"category\":\"dairy\",\"quantity\":1,\"unit\":\"carton\",\"expires_on\":\"2026-04-15T00:00:00+08:00\",\"purchased_at\":\"2026-04-11T18:00:00+08:00\"}"
-```
-
-Recipes and cooking:
-
-```bash
 curl http://127.0.0.1:8000/recipes
 curl http://127.0.0.1:8000/recipes/suggestions
-curl -X POST http://127.0.0.1:8000/recipes/online/search \
-  -H "Content-Type: application/json" \
-  -d "{\"query\":\"high protein chicken dinner\",\"max_results\":3}"
-curl -X POST http://127.0.0.1:8000/recipes/chicken_rice_bowl/cook
 ```
 
-Diagnostics and runtime:
+### Decision engine and heartbeat
 
 ```bash
-curl http://127.0.0.1:8000/runtime/state
-curl http://127.0.0.1:8000/diagnostics
 curl http://127.0.0.1:8000/decision/state/demo-user
 curl -X POST http://127.0.0.1:8000/decision/run/demo-user
-curl -X POST http://127.0.0.1:8000/heartbeat/check
+curl -X POST "http://127.0.0.1:8000/heartbeat/check?user_id=demo-user"
 curl http://127.0.0.1:8000/heartbeat/settings/demo-user
 ```
 
-Heartbeat settings through HTTP:
-
-```bash
-curl -X POST http://127.0.0.1:8000/heartbeat/settings/demo-user \
-  -H "Content-Type: application/json" \
-  -d "{\"enabled\":true,\"interval_minutes\":60,\"dinner_time\":\"18:30\",\"chat_id\":\"demo-user\"}"
-
-curl -X POST "http://127.0.0.1:8000/heartbeat/check?user_id=demo-user"
-```
-
-User steering through HTTP:
-
-```bash
-curl http://127.0.0.1:8000/users/demo-user/preferences
-curl -X POST http://127.0.0.1:8000/users/demo-user/preferences \
-  -H "Content-Type: application/json" \
-  -d "{\"mode\":\"lazy\",\"max_prep_minutes\":7,\"notification_frequency\":\"quiet\",\"dietary_preferences\":[\"avoid dairy\"]}"
-
-curl http://127.0.0.1:8000/users/demo-user/state
-curl -X POST http://127.0.0.1:8000/users/demo-user/state \
-  -H "Content-Type: application/json" \
-  -d "{\"state\":\"tired\",\"duration_hours\":24,\"note\":\"long day\"}"
-
-curl -X POST http://127.0.0.1:8000/decision/feedback \
-  -H "Content-Type: application/json" \
-  -d "{\"user_id\":\"demo-user\",\"thread_key\":\"cook:veggie_omelette\",\"status\":\"ignored\",\"detail\":\"skip tonight\"}"
-```
-
-Grocery confirmation flow:
-
-```bash
-curl -X POST http://127.0.0.1:8000/groceries/order/recipe/chicken_rice_bowl
-curl -X POST http://127.0.0.1:8000/confirmations/<confirmation_id>/confirm
-curl -X POST http://127.0.0.1:8000/confirmations/<confirmation_id>/cancel
-```
-
-Telegram mock route:
+### Telegram simulation without real webhook traffic
 
 ```bash
 curl -X POST http://127.0.0.1:8000/telegram/mock \
@@ -181,105 +209,145 @@ curl -X POST http://127.0.0.1:8000/telegram/mock \
   -d "{\"user_id\":\"demo-user\",\"message\":\"what can I cook tonight?\"}"
 ```
 
-## Telegram Heartbeat Commands
+---
 
-Per-user heartbeat settings are stored in SQL and default to hourly checks in `Asia/Singapore`.
+## MCP Tool Surface and Confirmation Flow
 
-Supported commands:
-
-- `/heartbeat`
-- `/heartbeat status`
-- `/heartbeat on`
-- `/heartbeat off`
-- `/heartbeat time 18:30`
-- `/heartbeat now`
-
-Examples:
-
-```text
-/heartbeat status
-/heartbeat on
-/heartbeat time 18:30
-/heartbeat now
-```
-
-Heartbeat behavior:
-
-- checks run every hour in the background
-- the decision engine uses the user’s meal windows, mode, notification frequency, and temporary states
-- before dinner, FridgeMate can ask if the user is coming home to eat
-- if ingredients are available, it suggests one low-effort meal first instead of dumping options
-- if staples are low, it can draft pickup items like milk or eggs
-- repeated alerts are deduped until status materially changes
-
-Natural-language steering examples:
-
-```text
-I'm exhausted today
-Not home tonight
-I'm commuting
-Give me easier meals this week
-I only want 5-minute meals
-Stop messaging me at night
-Switch to lazy mode
-Be quiet today
-```
-
-Telegram callback actions:
-
-- `Cook this`
-- `Show easier option`
-- `Draft shopping list`
-- `Ignore tonight`
-- `Not home`
-- `Ordered food`
-
-Helper script:
-
-```bash
-python scripts/show_heartbeat_status.py demo-user
-```
-
-## MCP Tool Surface
-
-Tool metadata is centralized and exposed at `GET /mcp/tools`. Each tool describes:
-
-- `policy`
-- `when_to_use`
-- `when_not_to_use`
-- `authoritative_source`
-
-Useful tool checks:
+List all tools:
 
 ```bash
 curl http://127.0.0.1:8000/mcp/tools
+```
+
+Call a tool:
+
+```bash
 curl -X POST http://127.0.0.1:8000/mcp/call \
   -H "Content-Type: application/json" \
   -d "{\"tool_name\":\"get_inventory_batches\",\"arguments\":{}}"
-curl -X POST http://127.0.0.1:8000/mcp/call \
-  -H "Content-Type: application/json" \
-  -d "{\"tool_name\":\"get_heartbeat_status\",\"arguments\":{\"user_id\":\"demo-user\"}}"
-curl -X POST http://127.0.0.1:8000/mcp/call \
-  -H "Content-Type: application/json" \
-  -d "{\"tool_name\":\"run_decision\",\"arguments\":{\"user_id\":\"demo-user\",\"force\":\"true\"}}"
 ```
 
-Protected actions return `requires_confirmation: true` first:
+Protected operations return `requires_confirmation: true` first. Complete or cancel with:
 
-- `clear_inventory`
-- `remove_inventory_item`
-- `order_groceries_for_recipe`
-- `order_staple_restock`
+```bash
+curl -X POST http://127.0.0.1:8000/confirmations/<confirmation_id>/confirm
+curl -X POST http://127.0.0.1:8000/confirmations/<confirmation_id>/cancel
+```
+
+---
+
+## Troubleshooting
+
+### 1. Uvicorn fails at startup
+
+Check:
+
+- `python -m pip install -r requirements.txt` completed successfully
+- `.env` exists and required keys are populated
+- `alembic upgrade head` has run
+
+Then inspect:
+
+```bash
+curl http://127.0.0.1:8000/config/status
+curl http://127.0.0.1:8000/debug/logs
+```
+
+### 2. Telegram is not responding
+
+Check mode first:
+
+```bash
+curl http://127.0.0.1:8000/config/status
+```
+
+- If mode is polling, run:
+
+```bash
+python scripts/poll_telegram.py
+```
+
+- If mode is webhook, verify registration and secret:
+
+```bash
+python scripts/check_telegram_webhook.py
+curl http://127.0.0.1:8000/telegram/webhook/info
+```
+
+### 3. LLM-backed features fail (online recipe search or richer replies)
+
+Check:
+
+- `LLM_API_KEY`
+- `LLM_MODEL`
+- `LLM_BASE_URL` connectivity (if used)
+
+Inspect:
+
+```bash
+curl http://127.0.0.1:8000/debug/integrations
+curl http://127.0.0.1:8000/debug/logs
+```
+
+### 4. Inventory or decisions look wrong
+
+Inspect current operational state:
+
+```bash
+curl http://127.0.0.1:8000/memory
+curl http://127.0.0.1:8000/runtime/state
+curl http://127.0.0.1:8000/diagnostics
+curl http://127.0.0.1:8000/decision/state/demo-user
+```
+
+Common cause: no realistic history in a fresh database. Fix by seeding:
+
+```bash
+curl -X POST http://127.0.0.1:8000/seed/history \
+  -H "Content-Type: application/json" \
+  -d "{\"days\":180,\"seed\":4052}"
+```
+
+### 5. You cannot find why a response happened
+
+Enable trace mode and restart app:
+
+```env
+TRACE_MODE=1
+```
+
+Then inspect generated trace artifacts under `data/traces` and logs in `data/runtime_logs.json`.
+
+---
+
+## Server Deployment Notes (VPS/Cloud)
+
+A practical baseline:
+
+1. Set environment variables securely (do not commit secrets).
+2. Use a process manager (for example systemd or supervisor) for `uvicorn`.
+3. Put a reverse proxy in front (Nginx/Caddy) if exposing public webhook endpoints.
+4. Use HTTPS for Telegram webhook mode.
+5. Restrict or protect debug routes in production (`/debug/logs`, `/debug/integrations`).
+6. Keep `DATABASE_URL` on durable storage.
+
+Suggested startup command:
+
+```bash
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+---
 
 ## Testing
 
-Run the test suite:
+Run all tests:
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-Useful targeted checks:
+Targeted checks:
 
 ```bash
 python -m unittest tests.test_mcp_tools
@@ -287,22 +355,14 @@ python -m unittest tests.test_sql_storage
 python -m compileall app tests
 ```
 
-What the tests cover:
+---
 
-- Alembic migration bootstrapping
-- SQL repository CRUD and snapshot persistence
-- six-month seed generation and reproducibility
-- diagnostics and runtime state checks
-- MCP tool coverage
-- destructive confirmation flow
-- Telegram `/heartbeat` command handling
-- natural-language steering into structured preference and state updates
-- callback-query feedback on proactive nudges
-- adaptive decision gating for lazy and silent modes
+## Suggested First Run Path
 
-## Notes
+1. Start app locally.
+2. Verify `/health`, `/config/status`, `/debug/integrations`.
+3. Call `/telegram/mock` with a demo message.
+4. Inspect `/memory` and `/diagnostics`.
+5. Test one MCP call and one confirmation-protected action.
 
-- SQLite is the default runtime store; the schema and repository layer are kept portable enough for Postgres later.
-- `MEMORY_STORE_PATH` is deprecated as the live operational store.
-- Online recipe discovery requires `LLM_API_KEY`.
-- Polling mode starts automatically when `TELEGRAM_CHAT_ID` is empty and `TELEGRAM_BOT_TOKEN` is set.
+If these work, your deployment is in a healthy baseline state.

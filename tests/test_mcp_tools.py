@@ -5,11 +5,13 @@ import json
 import os
 import platform
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from app.core.container import build_container
 from app.core.llm_gateway import LLMGatewayService
+from app.core.llm_service import LLMReplyResult
 from app.core.recipe_discovery_service import RecipeDiscoveryService, RecipeSearchChatCompletionError
 from app.core.settings import get_settings
 from app.core.time_utils import utc_now
@@ -679,6 +681,18 @@ class MCPToolSmokeTest(unittest.TestCase):
         self.assertNotIn("Ice:", reply)
         self.assertIn("calories and macros", reply.lower())
 
+    def test_inventory_reply_is_numbered_list(self) -> None:
+        reply = self.container.telegram_service.build_reply_for_user(
+            "u-inventory-format",
+            "/inventory",
+            chat_id="chat-inventory-format",
+        )
+
+        self.assertIn("Current inventory:", reply)
+        self.assertIn("1. ", reply)
+        self.assertIn("2. ", reply)
+        self.assertNotIn("- bananas:", reply)
+
     def test_trace_mode_emits_request_trace_with_memory_and_tools(self) -> None:
         def fake_create_response(payload: dict[str, object]) -> dict[str, object]:
             return {
@@ -997,6 +1011,8 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         async def fake_telegram_api_call_async(method_name: str, payload: dict[str, object]) -> dict[str, object]:
             calls.append((method_name, payload))
+            if method_name == "sendMessage":
+                return {"ok": True, "method": method_name, "result": {"message_id": 321}}
             return {"ok": True, "method": method_name}
 
         async def fake_build_reply_for_user_async(user_id, text, chat_id=None, draft_callback=None) -> str:
@@ -1006,6 +1022,12 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         self.container.telegram_service._telegram_api_call_async = fake_telegram_api_call_async
         self.container.telegram_service.build_reply_for_user_async = fake_build_reply_for_user_async
+        self.container.telegram_service.settings = self.container.telegram_service.settings.__class__(
+            **{
+                **self.container.telegram_service.settings.__dict__,
+                "telegram_send_retries": 1,
+            }
+        )
 
         result = self.container.telegram_service.process_update(
             {
@@ -1020,8 +1042,8 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "sent")
         self.assertEqual(result["reply"], "Final reply.")
-        self.assertEqual(calls[0][0], "sendMessageDraft")
-        self.assertEqual(calls[-1][0], "sendMessage")
+        self.assertEqual(calls[0][0], "sendMessage")
+        self.assertEqual(calls[-1][0], "editMessageText")
         self.assertTrue(self.container.telegram_service._draft_streaming_supported)
 
     def test_set_my_commands_registers_full_command_list(self) -> None:
@@ -1106,10 +1128,13 @@ class MCPToolSmokeTest(unittest.TestCase):
 
     def test_telegram_draft_falls_back_after_rejection(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
+        failed_once = False
 
         async def fake_telegram_api_call_async(method_name: str, payload: dict[str, object]) -> dict[str, object]:
+            nonlocal failed_once
             calls.append((method_name, payload))
-            if method_name == "sendMessageDraft":
+            if method_name == "sendMessage" and not failed_once:
+                failed_once = True
                 raise RuntimeError("HTTP request failed with status 404: method not found")
             return {"ok": True, "method": method_name}
 
@@ -1120,6 +1145,12 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         self.container.telegram_service._telegram_api_call_async = fake_telegram_api_call_async
         self.container.telegram_service.build_reply_for_user_async = fake_build_reply_for_user_async
+        self.container.telegram_service.settings = self.container.telegram_service.settings.__class__(
+            **{
+                **self.container.telegram_service.settings.__dict__,
+                "telegram_send_retries": 1,
+            }
+        )
 
         result = self.container.telegram_service.process_update(
             {
@@ -1134,7 +1165,7 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "sent")
         self.assertEqual(result["reply"], "Fallback final reply.")
-        self.assertEqual(calls[0][0], "sendMessageDraft")
+        self.assertEqual(calls[0][0], "sendMessage")
         self.assertEqual(calls[-1][0], "sendMessage")
         self.assertFalse(self.container.telegram_service._draft_streaming_supported)
 
@@ -1143,9 +1174,11 @@ class MCPToolSmokeTest(unittest.TestCase):
 
         async def fake_telegram_api_call_async(method_name: str, payload: dict[str, object]) -> dict[str, object]:
             calls.append((method_name, payload))
+            if method_name == "sendMessage":
+                return {"ok": True, "method": method_name, "result": {"message_id": 789}}
             return {"ok": True, "method": method_name}
 
-        def fake_generate_reply_streaming(
+        def fake_generate_reply_streaming_result(
             *,
             user_id: str,
             user_message: str,
@@ -1156,10 +1189,10 @@ class MCPToolSmokeTest(unittest.TestCase):
                 on_progress("Thinking...")
                 on_progress("Checking fridge data...")
                 on_progress("Finalizing reply...")
-            return "Streamed final reply."
+            return LLMReplyResult(text="Streamed final reply.")
 
         self.container.telegram_service._telegram_api_call_async = fake_telegram_api_call_async
-        self.container.llm_service.generate_reply_streaming = fake_generate_reply_streaming
+        self.container.llm_service.generate_reply_streaming_result = fake_generate_reply_streaming_result
 
         result = self.container.telegram_service.process_update(
             {
@@ -1172,17 +1205,116 @@ class MCPToolSmokeTest(unittest.TestCase):
             }
         )
 
-        draft_calls = [payload for method, payload in calls if method == "sendMessageDraft"]
+        draft_calls = [payload for method, payload in calls if method in {"sendMessage", "editMessageText"}]
         self.assertEqual(result["status"], "sent")
         self.assertEqual(result["reply"], "Streamed final reply.")
         self.assertTrue(draft_calls)
-        self.assertEqual(calls[-1][0], "sendMessage")
+        self.assertEqual(calls[-1][0], "editMessageText")
         self.assertTrue(
             any(
                 str(payload.get("text")).startswith(("Working on it", "Thinking", "Checking fridge", "Finalizing"))
                 for payload in draft_calls
             )
         )
+
+    def test_telegram_streaming_ignores_message_not_modified_error(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def fake_telegram_api_call_async(method_name: str, payload: dict[str, object]) -> dict[str, object]:
+            calls.append((method_name, payload))
+            if method_name == "sendMessage":
+                return {"ok": True, "method": method_name, "result": {"message_id": 456}}
+            if method_name == "editMessageText" and payload.get("text") == "Final reply.":
+                raise RuntimeError(
+                    'HTTP request failed with status 400: {"ok":false,"error_code":400,'
+                    '"description":"Bad Request: message is not modified: specified new message '
+                    'content and reply markup are exactly the same as a current content and reply markup of the message"}'
+                )
+            return {"ok": True, "method": method_name}
+
+        async def fake_build_reply_for_user_async(user_id, text, chat_id=None, draft_callback=None) -> str:
+            if draft_callback is not None:
+                await draft_callback("Final reply.")
+            return "Final reply."
+
+        self.container.telegram_service._telegram_api_call_async = fake_telegram_api_call_async
+        self.container.telegram_service.build_reply_for_user_async = fake_build_reply_for_user_async
+
+        result = self.container.telegram_service.process_update(
+            {
+                "update_id": 1004,
+                "message": {
+                    "chat": {"id": 12345},
+                    "from": {"id": "u-not-modified"},
+                    "text": "hello",
+                },
+            }
+        )
+
+        self.assertEqual(result["status"], "sent")
+        self.assertEqual(result["reply"], "Final reply.")
+        self.assertTrue(self.container.telegram_service._draft_streaming_supported)
+        self.assertEqual(calls[0][0], "sendMessage")
+        self.assertEqual(calls[-1][0], "editMessageText")
+
+    def test_telegram_bulk_inventory_add_is_deterministic_and_persists_items(self) -> None:
+        reply = self.container.telegram_service.build_reply_for_user(
+            user_id="u-inventory-added",
+            text="Add these into inventory\nFresh Produce\nXiao bai cai (bok choy)\nGai lan (Chinese broccoli)\nEggs",
+        )
+
+        self.assertIn("Added 3 item(s) to inventory", reply)
+        inventory_names = [item.name.lower() for item in self.container.inventory_agent.get_inventory()]
+        self.assertIn("xiao bai cai", inventory_names)
+        self.assertIn("gai lan", inventory_names)
+        self.assertIn("eggs", inventory_names)
+
+    def test_telegram_bulk_inventory_add_skips_ambiguous_lines(self) -> None:
+        reply = self.container.telegram_service.build_reply_for_user(
+            user_id="u-inventory-ambiguous",
+            text="Add these into inventory\nProtein\nPork belly slices or minced pork\nChicken thighs or whole chicken\nEggs",
+        )
+
+        self.assertIn("Added 1 item(s) to inventory", reply)
+        self.assertIn("Skipped ambiguous lines", reply)
+        inventory_names = [item.name.lower() for item in self.container.inventory_agent.get_inventory()]
+        self.assertIn("eggs", inventory_names)
+        self.assertNotIn("pork belly slices or minced pork", inventory_names)
+
+    def test_telegram_inventory_follow_up_uses_pending_bulk_context(self) -> None:
+        user_id = "u-inventory-followup"
+        candidates = [
+            {"name": "xiao bai cai", "quantity": 1.0, "unit": "bunch", "category": "produce", "source_line": "Xiao bai cai", "ambiguous": False},
+            {"name": "gai lan", "quantity": 1.0, "unit": "bunch", "category": "produce", "source_line": "Gai lan", "ambiguous": False},
+        ]
+        self.container.store.set_temporary_state(
+            user_id,
+            state="pending_bulk_inventory_import",
+            value="pending",
+            expires_at=utc_now() + timedelta(hours=1),
+            note=json.dumps({"candidates": candidates, "skipped_lines": []}),
+        )
+
+        reply = self.container.telegram_service.build_reply_for_user(
+            user_id=user_id,
+            text="Yes add this in a sensible way",
+        )
+
+        self.assertIn("Added 2 item(s) to inventory", reply)
+        inventory_names = [item.name.lower() for item in self.container.inventory_agent.get_inventory()]
+        self.assertIn("xiao bai cai", inventory_names)
+        self.assertIn("gai lan", inventory_names)
+
+    def test_telegram_inventory_add_does_not_write_to_shopping_list(self) -> None:
+        before_count = len(self.container.store.snapshot().pending_grocery_list)
+
+        self.container.telegram_service.build_reply_for_user(
+            user_id="u-no-shopping-list",
+            text="Add all these items into inventory.\nFresh Produce\nGarlic\nGinger\nTomatoes",
+        )
+
+        after_count = len(self.container.store.snapshot().pending_grocery_list)
+        self.assertEqual(before_count, after_count)
 
 
 if __name__ == "__main__":
